@@ -1,0 +1,5 @@
+# Sphinx build output
+_build/
+
+# automodapi / autosummary generated stub pages
+api/

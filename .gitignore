@@ -1,0 +1,10 @@
+data/
+docs/_build/
+dist/
+**/*.egg-info/
+**/__pycache__/
+.DS_Store
+CLAUDE.md
+.vscode/
+tests/
+scripts/

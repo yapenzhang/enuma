@@ -1,0 +1,58 @@
+[build-system]
+requires = ["setuptools>=64.0.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "enuma"
+version = "0.1.0"
+authors = [
+    {name = "Yapeng Zhang", email = "yapzhang@caltech.edu"},
+]
+description = ""
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.12"
+dependencies = [
+    "jax",
+    "numpyro",
+    "optax",
+    "h5py",
+    "numpy",
+    "scipy",
+    "matplotlib",
+    "astropy",
+    "tqdm",
+    # Reanalysis (GDAS) reference-profile fetch + NetCDF profile I/O / plot overlays.
+    "s3fs",      # download GDAS GRIB2 from the public AWS mirror
+    "xarray",    # GRIB/NetCDF column handling (standard_profile, plot)
+    "cfgrib",    # GRIB2 backend for xarray (pulls eccodes)
+    "h5netcdf",  # NetCDF engine that avoids the netCDF4/libhdf5 dlopen clash on macOS
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pytest-benchmark",
+    "pyyaml",
+]
+
+[project.urls]
+"Homepage" = "https://github.com/yapenzhang/enuma"
+"Documentation" = "https://enuma.readthedocs.io/"
+
+[project.scripts]
+enuma = "enuma.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q -m 'not slow' --ignore=tests/bench_forward.py"
+markers = [
+    "slow: end-to-end integration tests (run with -m slow)",
+    "benchmark: forward_model perf benchmark (run via `pytest tests/bench_forward.py`)",
+]
