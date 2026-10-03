@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import Dict, NamedTuple, Tuple
 
 import jax.numpy as jnp
+import numpy as np
 
 __all__ = [
     "Layout",
@@ -49,8 +50,8 @@ class ModelParameters(NamedTuple):
     continuum_coeffs: jnp.ndarray            # (n_orders, n_cont_nodes)
     # Only used when ``ModelConfig.stellar_enabled``; otherwise pinned constants
     # the forward model ignores.
-    rv_systemic: jnp.ndarray = jnp.array(0.0)  # scalar, km/s
-    vsini: jnp.ndarray = jnp.array(1.0)        # scalar, km/s
+    rv_systemic: jnp.ndarray = np.array(0.0, np.float32)  # scalar, km/s
+    vsini: jnp.ndarray = np.array(1.0, np.float32)        # scalar, km/s
 
 
 # The structured leaf that fans out to per-species flat sites, and the flat-key
@@ -140,23 +141,23 @@ class ModelContext(NamedTuple):
     baryrv: jnp.ndarray               # barycentric RV term (km/s)
 
     # Normalized Stellar template on the opacity grid
-    stellar_template: jnp.ndarray = jnp.zeros(1)   # (len(model_wave),)
+    stellar_template: jnp.ndarray = np.zeros(1, np.float32)      # (len(model_wave),)
     # The grid's representative per-pixel velocity step (km/s).
-    stellar_dv_kms: jnp.ndarray = jnp.array(0.0)   # scalar, km/s/pixel
+    stellar_dv_kms: jnp.ndarray = np.array(0.0, np.float32)  # scalar, km/s/pixel
 
     # Atmospheric winds (GDAS): horizontal components on the layer-centre grid
     # and the per-layer line-of-sight Doppler velocity used by the wind term.
     # ``wind_v_los`` is (n_layers,) for a single exposure, (N, n_layers) for a
     # night. ``model_dv_kms`` is the model grid's velocity step (uniform grid).
-    wind_u_centers: jnp.ndarray = jnp.zeros(1)     # (n_layers,) m/s, eastward
-    wind_v_centers: jnp.ndarray = jnp.zeros(1)     # (n_layers,) m/s, northward
-    wind_v_los: jnp.ndarray = jnp.zeros(1)         # (n_layers,) or (N, n_layers) km/s
-    model_dv_kms: jnp.ndarray = jnp.array(0.0)     # scalar, km/s per model sample
+    wind_u_centers: jnp.ndarray = np.zeros(1, np.float32)    # (n_layers,) m/s, eastward
+    wind_v_centers: jnp.ndarray = np.zeros(1, np.float32)    # (n_layers,) m/s, northward
+    wind_v_los: jnp.ndarray = np.zeros(1, np.float32)        # (n_layers,) or (N, n_layers) km/s
+    model_dv_kms: jnp.ndarray = np.array(0.0, np.float32)    # scalar, km/s per model sample
 
     # Empirical instrument LSF (``ModelConfig.lsf_profile == "custom"``): a fixed,
     # normalised kernel already resampled onto the model grid (odd length, centred).
     # The analytic gaussian/voigt profiles leave the default sentinel in place.
-    lsf_kernel: jnp.ndarray = jnp.zeros(1)
+    lsf_kernel: jnp.ndarray = np.zeros(1, np.float32)
 
 
 class ModelConfig(NamedTuple):

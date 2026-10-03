@@ -26,7 +26,7 @@ from enuma.plotting.spectrum import (
 )
 
 __all__ = [
-    "plot_timeseries_disentangle",
+    "plot_timeseries_residuals",
     "plot_timeseries_profiles",
     "plot_timeseries_parameters",
     "plot_timeseries_diagnostics",
@@ -35,8 +35,9 @@ __all__ = [
 logger = logging.getLogger("enuma.plotting.timeseries")
 
 
-def plot_timeseries_disentangle(result, output_path="timeseries_disentangle.pdf",
-                                order: Optional[int] = None):
+
+def plot_timeseries_residuals(result, output_path="timeseries_residuals.pdf",
+                                ):
     """Residual diagnostic for a multi-exposure (time-series) fit.
 
     The plot stacks the residual image ``obs - model`` one spectral order per
@@ -62,7 +63,7 @@ def plot_timeseries_disentangle(result, output_path="timeseries_disentangle.pdf"
         resid = np.where(msk & (full != 0), obs / full, np.nan)  # (N, O, P)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", RuntimeWarning)
-        resid_n = resid - np.nanmean(resid, axis=0, keepdims=True)  # (N, O, P)
+        resid_n = resid / np.nanmean(resid, axis=0, keepdims=True) - 1. # (N, O, P)
 
     # Symmetric, robust colour scale centred on zero across all orders.
     vmax = np.nanpercentile(np.abs(resid_n), 95)
@@ -92,6 +93,16 @@ def plot_timeseries_disentangle(result, output_path="timeseries_disentangle.pdf"
     fig.colorbar(last_im, ax=axes, pad=0.01).set_label("resid_n")
 
     fig.savefig(output_path)
+    plt.close(fig)
+
+    fig, ax = plt.subplots(
+            nrows=1, ncols=1, figsize=(13, 4),
+            constrained_layout=True)
+    ax.plot(w.ravel(), np.std(resid_n[:, order_idx], axis=0).ravel(), color="k", lw=1.2)
+    ax.set_ylim(0.001, 0.05)
+    ax.set_xlabel("Wavelength (nm)")
+    ax.set_ylabel("Residual stddev")
+    fig.savefig(output_path.replace(".pdf", "_std.pdf"))
     plt.close(fig)
 
     logger.info("Saved time-series residual diagnostic → %s", output_path)
@@ -323,7 +334,7 @@ def plot_timeseries_diagnostics(result, output_dir: str) -> None:
     """
     out = pathlib.Path(output_dir)
     out.mkdir(parents=True, exist_ok=True)
-    plot_timeseries_disentangle(result, output_path=str(out / "disentangle.pdf"))
+    plot_timeseries_residuals(result, output_path=str(out / "residuals.pdf"))
     plot_timeseries_profiles(result, output_path=str(out / "profiles.pdf"))
     plot_timeseries_parameters(result, output_path=str(out / "parameters.pdf"))
     # The instrument diagnostic is a single-exposure plot (R(λ)/wave shift per

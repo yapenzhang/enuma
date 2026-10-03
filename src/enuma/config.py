@@ -52,7 +52,7 @@ class FitConfig:
     # ---- Atmosphere structure ----
     # Number of altitude-grid boundaries; layer cells/centres = n_layers - 1.
     n_layers: int = 40
-    z_top_km: float = 70.0
+    z_top_km: float = 60.0
     z_sampling_exponent: float = 2.0   # >1 packs layers near the surface
     # Observatory: an astropy site name (EarthLocation.of_site / get_site_names,
     # e.g. "keck", "paranal") or an EarthLocation instance. Supplies lat/lon/
@@ -129,6 +129,7 @@ class FitConfig:
     fit_vsini: bool = True
     stellar_rot_half_width: int = 151   # rotation kernel half-width (model pixels)
     stellar_epsilon: float = 0.6        # linear limb-darkening coeff
+
 
     def __post_init__(self):
         """Canonicalise (lower-case names, tuple-convert sequences) and validate the

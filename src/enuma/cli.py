@@ -254,6 +254,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="enuma", description="JAX-based telluric forward-model fitter.")
     parser.add_argument("-v", "--verbose", action="count", default=0,
                         help="-v INFO, -vv DEBUG (default WARNING).")
+    parser.add_argument("--threads", type=int,
+                        help="Max CPU threads JAX may use (default: all cores; "
+                             "or set ENUMA_NUM_THREADS).")
     sub = parser.add_subparsers(dest="cmd", required=True)
 
     fit_p = sub.add_parser("fit", help="Run a multi-order SVI fit.")
@@ -276,6 +279,9 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: Optional[Sequence[str]] = None) -> int:
     args = build_parser().parse_args(argv)
     _setup_logging(args.verbose)
+    if args.threads:
+        from enuma import set_num_threads
+        set_num_threads(args.threads)
     return args.func(args)
 
 

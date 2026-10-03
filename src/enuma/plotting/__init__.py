@@ -14,7 +14,7 @@ from enuma.plotting.spectrum import (
 )
 from enuma.plotting.timeseries import (
     plot_timeseries_diagnostics,
-    plot_timeseries_disentangle,
+    plot_timeseries_residuals,
     plot_timeseries_parameters,
     plot_timeseries_profiles,
 )
@@ -26,7 +26,7 @@ __all__ = [
     "plot_param_convergence",
     "plot_residuals_diagnostic",
     "plot_timeseries_diagnostics",
-    "plot_timeseries_disentangle",
+    "plot_timeseries_residuals",
     "plot_timeseries_parameters",
     "plot_timeseries_profiles",
 ]

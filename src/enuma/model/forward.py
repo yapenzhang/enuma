@@ -152,7 +152,8 @@ def get_layer_properties(ctx: ModelContext, params: ModelParameters
 def _optical_depth(ctx: ModelContext, params: ModelParameters,
                    config: ModelConfig) -> jnp.ndarray:
     """Telluric transmission on the model grid: bilinear (logP, T) interpolation
-    of each species' opacity into the optical depth, then ``exp(-tau·airmass)``.
+    (or (P, log T); see the commented-out weights) of each species' opacity into
+    the optical depth, then ``exp(-tau·airmass)``.
 
     When ``config.wind_enabled`` the per-layer GDAS line-of-sight wind Doppler-
     shifts each layer's opacity before the column is summed, applied to first
@@ -167,11 +168,23 @@ def _optical_depth(ctx: ModelContext, params: ModelParameters,
     n_P, n_T = grid0.shape[:2]
     n_PT = n_P * n_T
 
-    coord_P = jnp.clip((jnp.log10(p_centers) - grid_info.logP_min) / grid_info.logP_step, 0.0, n_P - 1.0)
+    # Pressure nodes may be non-uniform (searched); temperature nodes are uniform.
+    log_p_nodes = jnp.asarray(grid_info.logP_nodes)
+    log_p = jnp.clip(jnp.log10(p_centers), log_p_nodes[0], log_p_nodes[-1])
+    idx_P = jnp.clip(jnp.searchsorted(log_p_nodes, log_p, side="right") - 1, 0, n_P - 2)
     coord_T = jnp.clip((t_centers - grid_info.T_min) / grid_info.T_step, 0.0, n_T - 1.0)
-    idx_P = jnp.minimum(jnp.floor(coord_P).astype(jnp.int32), n_P - 2)
     idx_T = jnp.minimum(jnp.floor(coord_T).astype(jnp.int32), n_T - 2)
-    frac_P, frac_T = coord_P - idx_P, coord_T - idx_T
+
+    # Weights linear in (logP, T).
+    frac_P = (log_p - log_p_nodes[idx_P]) / (log_p_nodes[idx_P + 1] - log_p_nodes[idx_P])
+    frac_T = coord_T - idx_T
+
+    # # Weights linear in (P, log T): swap in for the two lines above.
+    # p_nodes = 10.0 ** log_p_nodes
+    # frac_P = (10.0 ** log_p - p_nodes[idx_P]) / (p_nodes[idx_P + 1] - p_nodes[idx_P])
+    # t_clip = grid_info.T_min + coord_T * grid_info.T_step
+    # t_lo = grid_info.T_min + idx_T * grid_info.T_step
+    # frac_T = jnp.log(t_clip / t_lo) / jnp.log((t_lo + grid_info.T_step) / t_lo)
 
     corner_idx = jnp.array([
         idx_P * n_T + idx_T, idx_P * n_T + idx_T + 1,

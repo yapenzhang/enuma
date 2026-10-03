@@ -22,12 +22,6 @@ Attribution
 Please cite the *enuma* paper (in prep.) when the package is used in a publication.
 
 
-Contributor
------------
-
-Yapeng Zhang
-
-
 Contact
 -------
 

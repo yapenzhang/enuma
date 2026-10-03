@@ -21,14 +21,13 @@ logger = logging.getLogger("enuma.model.opacity")
 class OpacityGridInfo(NamedTuple):
     """Grid-axis metadata for the (P, T) bilinear σ-interpolator.
 
-    The four fields describe the regular `(log10 P, T)` mesh the cross-section
-    table lives on; `forward_model` uses them to map (p_centers, t_centers) to
-    fractional grid coordinates.
+    The cross-section table lives on a mesh that is uniform in T but may be
+    non-uniform in pressure; `forward_model` uses these fields to locate each
+    (p_centers, t_centers) layer in the mesh.
     """
     T_min: float
     T_step: float
-    logP_min: float
-    logP_step: float
+    logP_nodes: np.ndarray   # (N_P,) ascending log10 P [dyne/cm^2]
 
 
 def load_pyrox_opacity(
@@ -61,17 +60,30 @@ def load_pyrox_opacity(
     sigma_log10_cgs = np.transpose(sigma_log10_cgs, (1, 2, 0))
     sigma_linear_cgs = np.power(10.0, sigma_log10_cgs, dtype=np.float32)
 
-    log_p = np.log10(P_grid)
+    # Pressure nodes may be non-uniform but must be ascending for the lookup.
+    p_order = np.argsort(P_grid)
+    P_grid, sigma_linear_cgs = P_grid[p_order], sigma_linear_cgs[p_order]
+
+    T_step = float(T_grid[1] - T_grid[0])
+    if not np.allclose(np.diff(T_grid), T_step):
+        raise ValueError(f"Temperature grid of {species_name} is not uniformly spaced.")
+
     grid_info = OpacityGridInfo(
         T_min=float(T_grid[0]),
-        T_step=float(T_grid[1] - T_grid[0]),
-        logP_min=float(log_p[0]),
-        logP_step=float(log_p[1] - log_p[0]),
+        T_step=T_step,
+        logP_nodes=np.log10(P_grid),
     )
 
     grid_values = device_put(jnp.array(sigma_linear_cgs, dtype=jnp.float32))
     wavelength_grid = np.asarray(wave_grid, dtype=np.float64)
     return grid_values, grid_info, wavelength_grid
+
+
+def _same_pt_axes(a: OpacityGridInfo, b: OpacityGridInfo) -> bool:
+    """Whether two grids share (P, T) axes; ``forward_model`` uses one set for all species."""
+    return (a.logP_nodes.shape == b.logP_nodes.shape
+            and np.allclose(a.logP_nodes, b.logP_nodes)
+            and np.isclose(a.T_min, b.T_min) and np.isclose(a.T_step, b.T_step))
 
 
 def get_opacities(species_list: list, wave_range: tuple,
@@ -96,9 +108,11 @@ def get_opacities(species_list: list, wave_range: tuple,
             continue
 
         if common_wave_grid is None:
-            common_wave_grid = wave
+            common_wave_grid, common_info = wave, info
         elif not jnp.allclose(wave, common_wave_grid, atol=1e-5):
             raise ValueError(f"Wavelength grid for {species} does not match previous species!")
+        elif not _same_pt_axes(info, common_info):
+            raise ValueError(f"(P, T) grid for {species} does not match previous species!")
         opacity_grids[species] = (grid, info)
 
     return opacity_grids, common_wave_grid

@@ -15,7 +15,7 @@ directly: ``enuma.model`` (forward model + setup, opacities, atmosphere),
 ``enuma.config``, ``enuma.constants``, and ``enuma.plotting``.
 """
 
-from enuma.backend import set_device
+from enuma.backend import set_device, set_num_threads
 from enuma.io.data_loader import (
     load_fits_spectra,
     load_h5_spectra,
@@ -40,7 +40,7 @@ from enuma.plotting import (
     plot_loss_history,
     plot_residuals_diagnostic,
     plot_timeseries_diagnostics,
-    plot_timeseries_disentangle,
+    plot_timeseries_residuals,
     plot_timeseries_parameters,
     plot_timeseries_profiles,
 )
@@ -54,6 +54,7 @@ from enuma.model.stellar import (
 __all__ = [
     # High-level
     "set_device",
+    "set_num_threads",
     "load_fits_spectra",
     "load_h5_spectra",
     "FitConfig",
@@ -83,7 +84,7 @@ __all__ = [
     "plot_residuals_diagnostic",
     "plot_instrument_diagnostics",
     "plot_loss_history",
-    "plot_timeseries_disentangle",
+    "plot_timeseries_residuals",
     "plot_timeseries_profiles",
     "plot_timeseries_parameters",
     "plot_timeseries_diagnostics",

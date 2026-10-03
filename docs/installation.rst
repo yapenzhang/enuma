@@ -40,6 +40,19 @@ constructing any JAX arrays:
     enuma.set_device("gpu")  # or "cpu"
 
 
+Limiting CPU usage
+------------------
+
+On CPU, JAX uses every core by default. To cap it, call
+:func:`enuma.set_num_threads` before the first computation, or export
+``ENUMA_NUM_THREADS`` before starting Python (the CLI also takes ``--threads``):
+
+.. code-block:: python
+
+    import enuma
+    enuma.set_num_threads(4)  # at most ~400% CPU
+
+
 Opacity data
 ------------
 
