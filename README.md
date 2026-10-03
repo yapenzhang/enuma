@@ -2,7 +2,7 @@
 
 *enuma* is a JAX-based forward model and fitter for telluric transmission in
 high-resolution spectra. The forward model compute the line-by-line transmission spectrum 
-through a layered atmosphere with flexible temperature and mixing ratio profiles informed by meterological data.  
+through a layered atmosphere with flexible temperature and mixing ratio profiles informed by meterological data. 
 The model is end-to-end differentiable, allowing fast fitting with NumPyro via Stochastic Variational Inference (SVI).
 
 ## Install
