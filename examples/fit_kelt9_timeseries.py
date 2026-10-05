@@ -1,13 +1,3 @@
-#!/usr/bin/env python
-"""Time-series telluric fit of a night of KELT-9 exposures.
-
-Joint multi-exposure fit using the *airmass leverage*: the telluric optical depth
-scales with airmass while the (stellar) source does not, so sharing the dry-species
-columns (here O2, a well-mixed gas → its A-band at ~760 nm is the strongest lever)
-across the night and scaling each exposure by its own airmass separates telluric
-from source. H2O and temperature vary through the night and stay per-exposure.
-"""
-
 import logging
 import pathlib
 import sys

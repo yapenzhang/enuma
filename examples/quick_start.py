@@ -2,8 +2,7 @@
 
 The canonical smoke run of the high-level ``fit_spectrum`` API: load the FITS,
 build a ``FitConfig``, run the fit, and write the standard diagnostic PDFs plus
-the best-fit JSON/TXT into an output directory. The spectrum and the molecfit
-comparison both live in ``tests/``.
+the best-fit JSON/TXT into an output directory. 
 """
 
 import pathlib
@@ -17,6 +16,7 @@ from enuma.cli import _setup_logging
 _DATA_DIR = pathlib.Path(__file__).resolve().parent.parent / "tests"
 
 # import enuma
+# enuma.set_device("cpu")
 # enuma.set_num_threads(1)
 
 def main() -> int:

@@ -25,6 +25,8 @@ Quick start
             fit_species=("h2o", "co2", "ch4", "co"),  # fit columns of these only
             max_steps=850,
         ),
+        save_params_json_path="best_fit.json",
+        save_spectrum_txt_path="best_fit.txt",
     )
 
     result.plot()                      # writes fit_results.pdf + residuals_diagnostic.pdf
@@ -42,39 +44,36 @@ the instrument LSF profile, and the optimiser knobs. See the :ref:`api` referenc
 full field list.
 
 
+Limiting CPU usage
+*******************
+
+On CPU, JAX uses every core by default. To cap it, call
+:func:`enuma.set_num_threads` before the first computation, or export
+``ENUMA_NUM_THREADS`` before starting Python (the CLI also takes ``--threads``):
+
+.. code-block:: python
+
+    import enuma
+    enuma.set_num_threads(4)  # at most ~400% CPU
+
 
 Best-fit I/O
 ************
 
-Save the best-fit parameters to JSON and the best-fit spectrum to a plain-text
-file, then reload them later:
+The best-fit parameters are saved to JSON and the best-fit spectrum to a plain text
+file (wavelength, flux). To load them:
 
 .. code-block:: python
 
     from enuma import (
-        FitConfig,
-        fit_spectrum,
-        load_fits_spectra,
         load_best_fit_params_json,
         generate_best_fit_spectrum,
-    )
-
-    data = load_fits_spectra("zetCMa.fits", wave_range=(2050, 2500))
-
-    result = fit_spectrum(
-        data,
-        FitConfig(),
-        save_params_json_path="best_fit.json",
-        save_spectrum_txt_path="best_fit.txt",
     )
 
     params = load_best_fit_params_json("best_fit.json")
     spec = generate_best_fit_spectrum(params, result.context, result.config,
                                       obs_flux=data["flux"])
     model_flux = spec["flux_model"]
-
-See ``examples/quick_start.py`` for a worked example covering toggles (freeze
-temperature, restrict species, etc.).
 
 
 Command-line interface

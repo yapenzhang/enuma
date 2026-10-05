@@ -13,7 +13,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from enuma.config import FitConfig
-from enuma.constants import C_KMS
+from enuma.constants import C_KMS, MATMUL_PRECISION
 from enuma.model._paths import cache_root
 
 __all__ = [
@@ -218,7 +218,8 @@ def apply_stellar(template, dv_kms, rv_kms, vsini_kms,
     shift is a single fractional-pixel shift shared by every pixel
     """
     kernel = rotational_kernel(vsini_kms, dv_kms, half_width, epsilon)
-    broadened = 1.0 + jnp.convolve(template - 1.0, kernel, mode="same")
+    broadened = 1.0 + jnp.convolve(template - 1.0, kernel, mode="same",
+                                   precision=MATMUL_PRECISION)
 
     n = broadened.shape[0]
     # Net pixel shift on the log-uniform grid. Positive rv ⇒ redshift ⇒ each

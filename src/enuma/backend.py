@@ -31,13 +31,13 @@ logging.getLogger("jax._src.xla_bridge").setLevel(logging.WARNING)
 
 
 def set_device(device: str = "cpu"):
-    """Globally configure JAX and NumPyro to use 'cpu' or 'gpu'.
+    """Globally configure JAX and NumPyro to use 'cpu' or 'cuda'.
 
     Must be called BEFORE any JAX arrays are created or compiled.
     """
     device = device.lower()
-    if device not in ('cpu', 'gpu'):
-        raise ValueError("Device must be 'cpu' or 'gpu'")
+    if device not in ('cpu', 'cuda'):
+        raise ValueError("Device must be 'cpu' or 'cuda'")
 
     jax.config.update("jax_platform_name", device)
     numpyro.set_platform(device)

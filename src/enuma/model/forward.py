@@ -4,7 +4,8 @@ from typing import Dict, Tuple
 import jax
 import jax.numpy as jnp
 
-from enuma.constants import G_EARTH, LSF_FWHM_TO_SIGMA, MMW_DRY_AIR, MMW_H2O
+from enuma.constants import (G_EARTH, LSF_FWHM_TO_SIGMA, MATMUL_PRECISION, MMW_DRY_AIR,
+                             MMW_H2O)
 from enuma.model.stellar import apply_stellar
 from enuma.model.voigt import voigt_profile
 from enuma.state import Layout, ModelConfig, ModelContext, ModelParameters
@@ -84,7 +85,8 @@ def apply_variable_lsf(model_flux: jnp.ndarray,
 
     def conv(start, kernel):
         cp = jax.lax.dynamic_slice(flux_p, (start,), (chunk + 2 * pad_k,))
-        return jnp.convolve(cp, kernel, mode='valid')   # output size = chunk
+        return jnp.convolve(cp, kernel, mode='valid',   # output size = chunk
+                            precision=MATMUL_PRECISION)
 
     out = jax.vmap(conv)(starts, kernels)        # (n_chunks, chunk)
     return out.flatten()[:n]
@@ -109,16 +111,16 @@ def apply_custom_lsf(model_flux: jnp.ndarray, kernel: jnp.ndarray) -> jnp.ndarra
     """
     pad = kernel.shape[0] // 2
     flux_p = jnp.pad(model_flux, (pad, pad), mode='edge')
-    return jnp.convolve(flux_p, kernel, mode='valid')
+    return jnp.convolve(flux_p, kernel, mode='valid', precision=MATMUL_PRECISION)
 
 
 def expand_tp_profiles(ctx: ModelContext, params: ModelParameters
                        ) -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
     """Expand the non-centered GP latents into per-layer T and H2O corrections.
     """
-    t_dev = ctx.temp_chol_L @ params.t_latent
+    t_dev = jnp.matmul(ctx.temp_chol_L, params.t_latent, precision=MATMUL_PRECISION)
     t_centers = ctx.t_ref_centers * (1.0 + t_dev)
-    h2o_dex = ctx.h2o_chol_L @ params.h2o_latent
+    h2o_dex = jnp.matmul(ctx.h2o_chol_L, params.h2o_latent, precision=MATMUL_PRECISION)
     return t_dev, t_centers, h2o_dex
 
 
@@ -201,11 +203,12 @@ def _optical_depth(ctx: ModelContext, params: ModelParameters,
         col_density = gas_mixing[species] * n_col_air                       # (n_layers,)
         grid_flat = grid_values.reshape(n_PT, -1)
         weighted_col = jnp.zeros(n_PT).at[corner_idx].add(corner_weights * col_density)
-        total_tau += weighted_col @ grid_flat
+        total_tau += jnp.matmul(weighted_col, grid_flat, precision=MATMUL_PRECISION)
         if config.wind_enabled:
             weighted_col_wind = jnp.zeros(n_PT).at[corner_idx].add(
                 corner_weights * (col_density * ctx.wind_v_los))
-            total_tau_wind += weighted_col_wind @ grid_flat
+            total_tau_wind += jnp.matmul(weighted_col_wind, grid_flat,
+                                         precision=MATMUL_PRECISION)
 
     if config.wind_enabled:
         # First-order per-layer wind Doppler shift on the velocity-uniform grid:
@@ -302,7 +305,8 @@ def _transmission(params: ModelParameters, ctx: ModelContext,
 def _continuum(params: ModelParameters, ctx: ModelContext) -> jnp.ndarray:
     """Per-order continuum on the observed grid: the B-spline basis times the fitted
     per-order weights, ``(n_orders, n_pixels)``."""
-    return jax.vmap(lambda w: ctx.cont_bspline_matrix @ w)(params.continuum_coeffs)
+    return jax.vmap(lambda w: jnp.matmul(ctx.cont_bspline_matrix, w,
+                                         precision=MATMUL_PRECISION))(params.continuum_coeffs)
 
 
 @partial(jax.jit, static_argnums=(2,))

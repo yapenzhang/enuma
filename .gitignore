@@ -1,4 +1,4 @@
-data/
+data/opacities/
 docs/_build/
 dist/
 **/*.egg-info/

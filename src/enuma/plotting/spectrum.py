@@ -192,7 +192,7 @@ def _plot_profile_figure(optimized_params, context, fit_species, output_path):
         c = colors[i % len(colors)]
         vmr_ref = context.vmr_ref_centers[species]
         ax_vmr.plot(jax.device_get(vmr_ref * (10 ** opt_dex)), z_km,
-                    color=c, linestyle='-', linewidth=2, label=species)
+                    color=c, linestyle='-', linewidth=1, label=species)
         ax_vmr.plot(jax.device_get(vmr_ref), z_km, color=c, linestyle='--', alpha=0.6)
     ax_vmr.plot([], [], color='0.4', linestyle='--', label='initial')
 
@@ -205,9 +205,9 @@ def _plot_profile_figure(optimized_params, context, fit_species, output_path):
     # --- Temperature: reference (initial, dashed) vs fitted (converged, solid),
     # T_ref * (1 + temp_chol_L @ t_latent), matching the forward model.
     ax_t = fig.add_subplot(gs[0, 1], sharey=ax_vmr)
-    ax_t.plot(jax.device_get(t_opt), z_km, color='k', linestyle='-', linewidth=2, label='Fitted')
+    ax_t.plot(jax.device_get(t_opt), z_km, color='k', linestyle='-', linewidth=1, label='Fitted')
     ax_t.plot(jax.device_get(context.t_ref_centers), z_km, color='k', linestyle='--',
-              linewidth=2, alpha=0.6, label='Initial')
+              linewidth=1, alpha=0.6, label='Initial')
     ax_t.set(xlim=(190, 300), yscale='log', xlabel="Temperature (K)", title="Temperature Profile")
     ax_t.legend(loc='upper right', fontsize='small')
     ax_t.grid(True, alpha=0.3, which='both')
@@ -278,47 +278,21 @@ def plot_residuals_diagnostic(
 
     rms = np.full(n_bins, np.nan)
     rms_cmp = np.full(n_bins, np.nan) if flat_resid_cmp is not None else None
-    median = np.full(n_bins, np.nan)
     for b in range(n_bins):
         sel = bin_idx == b
         if sel.sum() > 5:
             rms[b] = np.sqrt(np.mean(flat_resid[sel] ** 2))
             if flat_resid_cmp is not None:
                 rms_cmp[b] = np.sqrt(np.mean(flat_resid_cmp[sel] ** 2))
-            median[b] = np.median(flat_resid[sel])
     bin_centers = 0.5 * (bin_edges[:-1] + bin_edges[1:])
     valid = np.isfinite(rms) & (bin_centers < 1)
-    bin_centers, rms, median = bin_centers[valid], rms[valid], median[valid]
+    bin_centers, rms = bin_centers[valid], rms[valid]
     if rms_cmp is not None:
         rms_cmp = rms_cmp[valid]
     ref_d1 = 1.0 / np.sqrt(bin_centers) * rms[-1]
 
-    fig, axes = plt.subplots(1, 3, figsize=(12, 4))
-
-    # Panel A: scatter residuals vs model flux (random subsample for speed).
-    ax = axes[0]
-    n_show = min(50000, flat_resid.size)
-    sub = np.random.default_rng(0).choice(flat_resid.size, n_show, replace=False)
-    ax.scatter(flat_model[sub], flat_resid[sub], s=1, alpha=0.1, color='k')
-    ax.axhline(0, color='r', linestyle='--', alpha=0.5)
-    ax.set_xlabel("Model flux")
-    ax.set_ylabel("Residual (data / model)")
-    ax.set_title("Residuals vs Model Flux")
-    ax.grid(True, alpha=0.3)
-    ax.minorticks_on()
-
-    # Panel B: median residual per bin (W/M signature visualisation).
-    ax = axes[1]
-    ax.plot(bin_centers, median, 'ko-', markersize=4)
-    ax.axhline(0, color='r', linestyle='--', alpha=0.5)
-    ax.set_xlabel("Model flux")
-    ax.set_ylabel("Median residual")
-    ax.set_title("Median residual per flux bin")
-    ax.grid(True, alpha=0.3)
-    ax.minorticks_on()
-
-    # Panel C: RMS vs depth, log-log, with a reference power law.
-    ax = axes[2]
+    # RMS vs depth, log-log, with a reference power law.
+    fig, ax = plt.subplots(figsize=(5, 4))
     ax.loglog(bin_centers, rms, 'ro-', markersize=5, label='RMS')
     if rms_cmp is not None:
         ax.loglog(bin_centers, rms_cmp, 'ko-', markersize=5, label='RMS (comparison)')

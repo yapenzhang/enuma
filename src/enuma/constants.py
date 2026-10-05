@@ -10,6 +10,7 @@ __all__ = [
     "C_KMS",
     "OPACITY_GRID_R",
     "LSF_FWHM_TO_SIGMA",
+    "MATMUL_PRECISION",
 ]
 
 # ---------- Physical constants (cgs) ----------
@@ -40,3 +41,8 @@ OPACITY_GRID_R = 5e5
 
 # Gaussian FWHM -> sigma factor: 2*sqrt(2*ln2).
 LSF_FWHM_TO_SIGMA = 2.35482
+
+# Precision of every matmul/convolution in the forward model. JAX's GPU default
+# (TF32 on Ampere, ~3 significant digits) is coarse enough to roughen the loss
+# surface and stall SVI; "highest" is full float32 (a no-op on CPU).
+MATMUL_PRECISION = "highest"

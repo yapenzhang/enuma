@@ -16,23 +16,13 @@ pip install -e .
 Precomputed opacity files can be downloaded from [KEEPER](https://keeper.mpdl.mpg.de/d/923d6a75180046e68e6e/)
 and placed in ``data/opacities/<species>.hdf5`` (e.g. ``h2o.hdf5``, ``co2.hdf5``, …). 
 
-<!-- ### GPU Support
+### GPU Support
 
-To run the model on a GPU, you must manually install the CUDA-enabled version of JAX corresponding to your system's CUDA version (e.g., CUDA 12):
+To run the model on a GPU, you must manually install the CUDA-enabled version of JAX corresponding to your system's CUDA version (e.g., CUDA 13):
 
 ```bash
-pip install -U "jax[cuda12]"
+pip install -U "jax[cuda13]"
 ```
-
-In your code, call `enuma.set_device("gpu")` **before** loading data or constructing any JAX arrays:
-
-```python
-import enuma
-enuma.set_device("gpu")  # or "cpu"
-
-# Now proceed as normal
-from enuma import FitConfig, fit_spectrum, load_fits_spectra
-``` -->
 
 
 ## Quick start

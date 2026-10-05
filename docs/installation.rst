@@ -18,39 +18,18 @@ Then install the package by running ``pip`` in the local repository folder:
 .. code-block:: console
 
     $ cd enuma
-    $ python -m pip install -e .
+    $ pip install -e .
 
 
 GPU support
 -----------
 
 To run the model on a GPU, manually install the CUDA-enabled build of JAX for
-your system's CUDA version (e.g. CUDA 12):
+your system's CUDA version (e.g. CUDA 13):
 
 .. code-block:: console
 
-    $ pip install -U "jax[cuda12]"
-
-In your code, call :func:`enuma.set_device` **before** loading data or
-constructing any JAX arrays:
-
-.. code-block:: python
-
-    import enuma
-    enuma.set_device("gpu")  # or "cpu"
-
-
-Limiting CPU usage
-------------------
-
-On CPU, JAX uses every core by default. To cap it, call
-:func:`enuma.set_num_threads` before the first computation, or export
-``ENUMA_NUM_THREADS`` before starting Python (the CLI also takes ``--threads``):
-
-.. code-block:: python
-
-    import enuma
-    enuma.set_num_threads(4)  # at most ~400% CPU
+    $ pip install -U "jax[cuda13]"
 
 
 Opacity data

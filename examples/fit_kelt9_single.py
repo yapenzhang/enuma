@@ -1,17 +1,3 @@
-#!/usr/bin/env python
-"""Single-exposure telluric fit of ONE KELT-9 exposure.
-
-Why this exists: in the time-series fit the LSF and wavelength solution are *shared*
-across the night, so any per-exposure drift in resolution or wavelength shows up as
-residuals that the joint fit cannot absorb. Here those are fit **per exposure**
-(``fit_resolution`` / ``fit_wave_solution`` both True), so comparing this fit's
-residuals against the time-series per-exposure residuals isolates whether the
-sharing assumption is what's hurting the individual exposures.
-
-Run (from the time_series worktree), after editing the settings below:
-    python scripts/fit_kelt9_single.py
-"""
-
 import logging
 import pathlib
 import sys
