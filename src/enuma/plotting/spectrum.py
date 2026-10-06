@@ -32,7 +32,35 @@ __all__ = [
 
 logger = logging.getLogger("enuma.plotting.spectrum")
 
-
+def _set_plot_style(size=13):
+    plt.rcParams.update(plt.rcParamsDefault)
+    plt.rcParams.update({
+        'font.size': size,
+        # 'font.family': 'sans-serif',
+        # 'font.serif': 'Helvetica',
+        # 'pdf.fonttype': 42,
+        "xtick.labelsize": size,   
+        "ytick.labelsize": size,   
+        "xtick.direction": 'in', 
+        "ytick.direction": 'in', 
+        'ytick.right': True,
+        'xtick.top': True,
+        "xtick.minor.visible": True,
+        "ytick.minor.visible": True,
+        # "xtick.major.size": 7,
+        # "xtick.minor.size": 3.5,
+        # "xtick.major.width": 2,
+        # "xtick.minor.width": 2,
+        # "ytick.major.size": 7,
+        # "ytick.minor.size": 3.5,
+        # "ytick.major.width": 2,
+        # "ytick.minor.width": 2,
+        "lines.linewidth": 1.,   
+        'image.origin': 'lower',
+        'image.cmap': 'magma',
+        "savefig.dpi": 300,   
+        })
+        
 def _load_comparison_model(comparison_fits: Optional[str]):
     """Read a 2-column wave/flux comparison spectrum, or return None."""
     if comparison_fits is None:
@@ -51,7 +79,7 @@ def plot_fit_results(
     config: ModelConfig,
     obs_flux: jnp.ndarray,
     obs_mask: jnp.ndarray = None,
-    output_path: str = "fit_results.pdf",
+    output_path: str = "fit_results.png",
     fit_species=None,
     profile_output_path: Optional[str] = None,
     benchmark: bool = True,
@@ -72,11 +100,13 @@ def plot_fit_results(
     obs_mask_np = jax.device_get(obs_mask).astype(bool) if obs_mask is not None else None
     model_m = _load_comparison_model(comparison_fits) if benchmark else None
 
+    _set_plot_style()
+
     _plot_spectrum_figure(optimized_params, context, wave_nm, obs_flux_np, flux_opt,
                           flux_tell, obs_mask_np, model_m, output_path)
 
     if profile_output_path is None:
-        profile_output_path = output_path.replace('.pdf', '_profiles.pdf')
+        profile_output_path = output_path.replace('.png', '_profiles.png')
     _plot_profile_figure(optimized_params, context, fit_species, profile_output_path)
 
 
@@ -225,7 +255,7 @@ def plot_residuals_diagnostic(
     obs_flux: jnp.ndarray,
     obs_mask: jnp.ndarray = None,
     n_bins: int = 20,
-    output_path: str = "residuals_diagnostic.pdf",
+    output_path: str = "residuals_diagnostic.png",
     comparison_fits: Optional[str] = None,
 ):
     """Bin residuals by model line depth to diagnose dominant error mode.
@@ -314,7 +344,7 @@ def plot_instrument_diagnostics(
     optimized_params: ModelParameters,
     context: ModelContext,
     config: ModelConfig,
-    output_path: str = "instrument_diagnostics.pdf",
+    output_path: str = "instrument_diagnostics.png",
 ):
     """Plot the fitted spectral resolution R(λ) and wavelength shift per order."""
     n_orders = context.obs_wave.shape[0]
@@ -367,7 +397,7 @@ def plot_instrument_diagnostics(
     plt.close(fig)
 
 
-def plot_param_convergence(param_history, output_path: str = "fit_param_convergence.pdf") -> None:
+def plot_param_convergence(param_history, output_path: str = "fit_param_convergence.png") -> None:
     """Write the per-parameter SVI convergence-trace PDF.
 
     One panel per fitted site; each thin line is one scalar component's value vs
@@ -406,7 +436,7 @@ def plot_param_convergence(param_history, output_path: str = "fit_param_converge
     plt.close(fig)
 
 
-def plot_loss_history(losses, output_path: str = "fit_loss_history.pdf") -> None:
+def plot_loss_history(losses, output_path: str = "fit_loss_history.png") -> None:
     """Write the SVI loss-history PDF.
 
     Y-axis is log-scaled when every loss is positive, else linear. Only the

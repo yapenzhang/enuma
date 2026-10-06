@@ -52,11 +52,12 @@ def main() -> int:
     # --- configure the fit ---
     fc = FitConfig(
         species=SPECIES, fit_species=SPECIES,
-        fit_temperature=True,   # per-exposure T profile
+        fit_temperature=False,   # per-exposure T profile
         fit_continuum=True,     # per-exposure blaze/throughput
         fit_resolution=True,    # shared LSF across the night
         fit_wave_solution=False,                   # shared wave solution
-        dry_vmr_per_exposure=True,        # else shared (airmass lever)
+        dry_vmr_per_exposure=False,        # else shared (airmass lever)
+        temperature_per_exposure=False,
         max_steps=MAX_STEPS,
         fit_windows=((688,690), (720,725), (755, 770), (815,820),),
         reference_profile_source="gdas",   # uses obs_date_utc (above) + site (below)

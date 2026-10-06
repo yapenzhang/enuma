@@ -5,6 +5,8 @@ high-resolution spectra. The forward model compute the line-by-line transmission
 through a layered atmosphere with flexible temperature and mixing ratio profiles informed by meterological data. 
 The model is end-to-end differentiable, allowing fast fitting with NumPyro via Stochastic Variational Inference (SVI).
 
+The package contains mostly AI-generated code.
+
 ## Install
 
 ```bash
@@ -33,8 +35,9 @@ from enuma import FitConfig, fit_spectrum, load_fits_spectra
 data = load_fits_spectra("zetCMa.fits", wave_range=(2050, 2500))
 
 fc = FitConfig(
-    species=("h2o", "co2", "ch4", "co", "n2o", "o2", "o3", "no"), # default
+    species=("h2o", "co2", "ch4", "co", "n2o"),
     fit_species=("h2o", "co2", "ch4", "co"),  # fit columns of these only
+    observatory="paranal",                   # required: an astropy site name
 )
 
 result = fit_spectrum(
@@ -43,11 +46,11 @@ result = fit_spectrum(
     save_spectrum_txt_path="best_fit.txt",
 )
 
-result.plot()                      # writes fit_results.pdf + residuals_diagnostic.pdf
+result.plot("fit_out")             # writes the diagnostic PDFs (fit_results.pdf, ...)
 ```
 
 The best-fit parameters are saved to JSON and the best-fit spectrum to a plain text
-file (wavelength, flux). To load them:
+file (columns `wavelength_nm flux_model flux_telluric`). To load them:
 
 ```python
 from enuma import load_best_fit_params_json, generate_best_fit_spectrum
@@ -57,7 +60,10 @@ spec = generate_best_fit_spectrum(params, result.context, result.config, obs_flu
 model_flux = spec["flux_model"]
 ```
 
-See [`examples/quick_start.py`](examples/quick_start.py) for a worked example.
+See [`examples/quick_start.py`](examples/quick_start.py) for a worked example. To fit a
+whole night of exposures jointly, use `fit_timeseries`; see
+[`examples/fit_kelt9_timeseries.py`](examples/fit_kelt9_timeseries.py) and the
+documentation.
 
 ## CLI
 
@@ -66,12 +72,13 @@ The package ships a small `argparse`-based CLI for running.
 ```bash
 # Run an SVI fit and write best_fit.json + best_fit.txt + the diagnostic PDFs.
 python -m enuma fit zetCMa.fits \
+    --observatory paranal \
     --species h2o,co2,ch4,co \
     --fit-species h2o,co2,ch4 \
     --out-dir ./fit_out
 
 # Regenerate plots from a saved best-fit JSON.
-python -m enuma plot zetCMa.fits --params fit_out/best_fit.json --out-dir ./fit_out
+python -m enuma plot zetCMa.fits --observatory paranal --params fit_out/best_fit.json --out-dir ./fit_out
 ```
 
 A YAML config mirrors `FitConfig` field-for-field; CLI flags override the YAML:
@@ -80,6 +87,7 @@ A YAML config mirrors `FitConfig` field-for-field; CLI flags override the YAML:
 # config.yaml
 species: ["h2o", "co2", "ch4"]
 fit_species: ["h2o", "co2"]
+observatory: paranal
 airmass: 1.4              # override a missing header value
 ```
 

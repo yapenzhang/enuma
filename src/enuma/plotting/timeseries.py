@@ -98,8 +98,8 @@ def plot_timeseries_residuals(result, output_path="timeseries_residuals.pdf",
     fig, ax = plt.subplots(
             nrows=1, ncols=1, figsize=(13, 4),
             constrained_layout=True)
-    ax.plot(w.ravel(), np.std(resid_n[:, order_idx], axis=0).ravel(), color="k", lw=1.2)
-    ax.set_ylim(0.001, 0.05)
+    ax.plot(wave.ravel(), np.std(resid_n, axis=0).ravel(), color="k", lw=1.2)
+    # ax.set_ylim(0.001, 0.05)
     ax.set_xlabel("Wavelength (nm)")
     ax.set_ylabel("Residual stddev")
     fig.savefig(output_path.replace(".pdf", "_std.pdf"))

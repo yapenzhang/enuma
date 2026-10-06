@@ -8,128 +8,217 @@ __all__ = [
 
 @dataclass(frozen=True)
 class FitConfig:
+    """Configuration for a telluric fit: the single entry point for every user knob.
 
+    ``FitConfig`` is a frozen dataclass; build one with keyword arguments and derive
+    variants with ``dataclasses.replace(fc, max_steps=500)``. The fields fall into these groups:
+
+    * **Species and free parameters**: ``species``, ``fit_species``, and the
+      ``fit_*`` toggles that make each parameter group free or pinned.
+    * **Time series**: the ``*_per_exposure`` flags, which choose whether a parameter
+      group is fitted per exposure or shared across a night
+      (:func:`~enuma.inference.fit.fit_timeseries` only).
+    * **Model sizes**: polynomial degrees and continuum B-spline nodes.
+    * **Atmosphere**: layer grid, GP priors on the T / H2O profiles, observatory
+      location, and the reference-profile source (``mipas`` / ``gdas``).
+    * **Observation overrides**: ``airmass`` and ``pwv_mm`` when headers are missing
+      or wrong.
+    * **Instrument LSF**: resolution seed, profile shape, and an optional empirical
+      kernel file.
+    * **Optimiser**: Adam step cap, learning rate, adaptive stopping, saturation mask.
+    * **Data locations**: opacity directory and download cache.
+    * **Stellar template**: PHOENIX-NewEra template selection and the stellar RV /
+      rotation.
+
+    Names are case-insensitive (canonicalised to lower case), and sequences are
+    converted to tuples on construction.
+    """
+
+    # ---- Species and free parameters ----
+    #: Species included in the forward model. Each needs an opacity grid
+    #: ``<opacity_dir>/<species>.hdf5``.
     species: Tuple[str, ...] = ("h2o", "co2", "n2o", "ch4", "co", "o3", "o2", "no")
-    # Subset of ``species`` whose columns are FREE. None => fit every species;
-    # empty tuple => fit no columns (all pinned at the reference VMR).
+    #: Subset of ``species`` whose columns are FREE in the fit. ``None`` fits every
+    #: species; an empty tuple fits no columns (all pinned at the reference VMR).
     fit_species: Optional[Tuple[str, ...]] = None
 
+    #: Fit the instrument resolution R(λ) per order (else pinned at ``resolution``).
     fit_resolution: bool = True
+    #: Fit the per-order wavelength-solution correction (else no shift).
     fit_wave_solution: bool = True
+    #: Fit the per-order B-spline continuum (else pinned at 1).
     fit_continuum: bool = True
+    #: Fit the temperature-profile deviation (else the reference T profile is used).
     fit_temperature: bool = True
 
-    # Optional list of (min_nm, max_nm) wavelength windows restricting the SVI fit
-    # to the orders that overlap them. A second stage then freezes that fitted 
-    # atmospheric state and fits the per-order continuum / LSF / wave solution 
-    # for the REMAINING orders. None (default) => fit every loaded order in one stage. 
+    #: Optional ``((min_nm, max_nm), ...)`` windows that restrict the full fit to the
+    #: orders overlapping them. A second stage then freezes the fitted atmosphere
+    #: and fits only the per-order continuum / LSF / wavelength solution of the
+    #: REMAINING orders. ``None`` fits every loaded order in one stage.
     fit_windows: Optional[Tuple[Tuple[float, float], ...]] = None
 
     # ---- Time-series only ----
+    #: Fit the dry-species columns per exposure (``True``) or share one set across
+    #: the night (``False``); time series only.
     dry_vmr_per_exposure: bool = True
+    #: Fit the temperature profile per exposure, or share it; time series only.
     temperature_per_exposure: bool = True
+    #: Fit the H2O profile per exposure, or share it; time series only.
     h2o_per_exposure: bool = True
+    #: Fit the resolution R(λ) per exposure, or share it; time series only.
     resolution_per_exposure: bool = True
+    #: Fit the wavelength solution per exposure, or share it; time series only.
     wave_per_exposure: bool = True
 
     # ---- Polynomial degrees / sizes ----
-    n_resolution_coeffs: int = 2   # 1 = constant R; 2 = linear in λ
-    n_wave_coeffs: int = 3         # 1 = const shift; 2 = +linear; 3 = +quadratic
+    #: Number of coefficients of the per-order log-resolution polynomial
+    #: (1 = constant R, 2 = linear in λ).
+    n_resolution_coeffs: int = 2
+    #: Number of coefficients of the per-order wavelength-shift polynomial
+    #: (1 = constant shift, 2 = + linear, 3 = + quadratic).
+    n_wave_coeffs: int = 3
+    #: Number of cubic B-spline weights in the per-order continuum.
     continuum_n_nodes: int = 20
 
     # ---- GP priors on the per-layer T and H2O dex deviations ----
+    #: GP kernel for the temperature deviation, one of ``"matern52"``,
+    #: ``"matern32"``, ``"rbf"`` or ``"rq"`` (rational quadratic).
     temp_gp_kernel: str = "matern52"
+    #: GP kernel for the H2O log10-VMR deviation.
     h2o_gp_kernel: str = "matern52"
-    temp_gp_amplitude: float = 0.02        # relative T deviation σ
+    #: GP amplitude of the relative temperature deviation ΔT/T (σ).
+    temp_gp_amplitude: float = 0.02
+    #: GP length scale of the temperature deviation (km).
     temp_gp_length_scale_km: float = 1.0
-    h2o_gp_amplitude: float = 0.5          # H2O dex σ
+    #: GP amplitude of the H2O deviation (σ, in dex).
+    h2o_gp_amplitude: float = 0.5
+    #: GP length scale of the H2O deviation (km).
     h2o_gp_length_scale_km: float = 1.0
-    # The spectrum has ~no sensitivity to the upper atmosphere so layers above these 
-    # altitudes carry no free GP latent and stay at climatology. None = every layer free.
-    temp_gp_cutoff_z_km: Optional[float] = 20.0 
-    h2o_gp_cutoff_z_km: Optional[float] = 20.0    
+    #: Altitude (km above sea level) above which temperature layers carry no free GP
+    #: latent and stay at the reference (the spectrum is barely sensitive there).
+    #: ``None`` frees every layer.
+    temp_gp_cutoff_z_km: Optional[float] = 20.0
+    #: Altitude (km above sea level) above which H2O layers stay at the reference.
+    #: ``None`` frees every layer.
+    h2o_gp_cutoff_z_km: Optional[float] = 20.0
 
     # ---- Atmosphere structure ----
-    # Number of altitude-grid boundaries; layer cells/centres = n_layers - 1.
+    #: Number of altitude-grid boundaries; the model has ``n_layers - 1`` layers.
     n_layers: int = 50
+    #: Top of the model atmosphere (km).
     z_top_km: float = 80.0
-    z_sampling_exponent: float = 2.0   # >1 packs layers near the surface
-    # Observatory: an astropy site name (EarthLocation.of_site / get_site_names,
-    # e.g. "keck", "paranal") or an EarthLocation instance. Supplies lat/lon/
-    # altitude for the barycentric RV and the date/site atmospheric profile fetch.
+    #: Power-law exponent of the altitude sampling; > 1 packs layers near the
+    #: surface, where most of the absorbing mass sits.
+    z_sampling_exponent: float = 2.0
+    #: Observatory, as an astropy site name (see ``EarthLocation.get_site_names()``,
+    #: e.g. ``"keck"``, ``"paranal"``) or an ``EarthLocation``. Required (or use
+    #: ``site_location``), since it sets the surface altitude, the barycentric RV, and
+    #: the location of the ``gdas`` profile.
     observatory: Optional[object] = None
-    # Explicit (lat_deg, lon_deg, alt_m) fallback when astropy cannot resolve
-    # ``observatory`` (unknown site name / offline).
+    #: Explicit ``(lat_deg, lon_deg, alt_m)`` fallback when astropy cannot resolve
+    #: ``observatory`` (unknown site name / offline).
     site_location: Optional[Tuple[float, float, float]] = None
 
     # ---- Observation overrides ----
-    # Airmass: ``airmass`` if set, else ``data["airmass"]``, else 1.0 (warn).
+    #: Airmass override for single-exposure fits. If ``None``, the airmass comes
+    #: from ``data["airmass"]`` (the header), else 1.0 with a warning.
     airmass: Optional[float] = None
-    # PWV (mm) used to scale the reference H2O VMR at setup time:
+    #: Precipitable water vapour (mm) used to rescale the reference H2O profile at
+    #: setup. Falls back to the header PWV / IWV; ``None`` skips the scaling.
     pwv_mm: Optional[float] = None
 
     # ---- Instrument LSF ----
-    resolution: float = 1.0        # ×1e5
-    lsf_profile: str = "gaussian"  # "gaussian", "voigt" (Lorentzian wings), or "custom"
+    #: Initial guess and prior mean of the resolving power, in units of 1e5
+    #: (e.g. ``1.0`` = R 100 000).
+    resolution: float = 1.0
+    #: LSF shape, one of ``"gaussian"``, ``"voigt"`` (Lorentzian wings), or
+    #: ``"custom"`` (set implicitly by ``lsf_kernel_file``).
+    lsf_profile: str = "gaussian"
+    #: Lorentzian HWHM as a fraction of the Gaussian σ (Voigt profile only).
     lsf_voigt_gamma_ratio: float = 0.01
-    lsf_kernel_width: int = 101    # odd pixel extent of the per-chunk kernel
-    lsf_n_chunks: int = 20         # constant-σ chunks per order
-    # Empirical instrument LSF measured from real data. Path to a whitespace-
-    # separated text file with two columns — velocity offset (km/s) and kernel
-    # amplitude (``#`` comment lines allowed). Setting it forces
-    # ``lsf_profile="custom"``: the measured kernel is resampled onto the (velocity-
-    # uniform) model grid and convolved as-is, so the fitted resolution R(λ) is
-    # bypassed and ``fit_resolution`` has no effect.
+    #: Odd pixel extent of the per-chunk LSF kernel on the model grid.
+    lsf_kernel_width: int = 101
+    #: Number of constant-σ chunks per order used to apply the variable-width LSF.
+    lsf_n_chunks: int = 20
+    #: Path to an empirical instrument LSF measured from real data, a whitespace-
+    #: separated text file with two columns, velocity offset (km/s) and kernel
+    #: amplitude (``#`` comment lines allowed). Setting it forces
+    #: ``lsf_profile="custom"``: the kernel is resampled onto the velocity-uniform
+    #: model grid and applied as-is, so the fitted R(λ) is bypassed and
+    #: ``fit_resolution`` has no effect.
     lsf_kernel_file: Optional[str] = None
 
     # ---- Optimiser ----
-    max_steps: int = 2000            # MAX Adam steps (hard cap; convergence stops earlier)
+    #: Hard cap on Adam steps (adaptive stopping usually ends the fit earlier).
+    max_steps: int = 2000
+    #: Adam learning rate.
     learning_rate: float = 3e-3
-    # Adaptive stopping: end the fit when the windowed loss plateaus rather than
-    # at a fixed step count (generalises across datasets/inits). ftol=0 disables.
+    #: Adaptive stopping tolerance. The fit stops when the relative improvement of
+    #: the windowed mean loss stays below this for ``convergence_patience``
+    #: checks. ``0`` disables it.
     convergence_ftol: float = 2e-4
-    convergence_patience: int = 5        # consecutive sub-ftol checks before stopping
-    convergence_check_every: int = 50    # evaluate the criterion every this many steps
-    convergence_min_steps: int = 200     # never stop before this many steps
-    saturation_mask_threshold: float = 0.15   # mask pixels at/below this flux
+    #: Consecutive below-``convergence_ftol`` checks required before stopping.
+    convergence_patience: int = 5
+    #: Evaluate the stopping criterion every this many steps.
+    convergence_check_every: int = 50
+    #: Never stop before this many steps.
+    convergence_min_steps: int = 200
+    #: Pixels whose normalised flux is below this value (saturated line cores) are
+    #: masked out of the likelihood.
+    saturation_mask_threshold: float = 0.15
 
     # ---- Reference atmosphere (T, P, H2O source; dry species always MIPAS) ----
-    # One of ``enuma.model.profile.REFERENCE_PROFILE_CHOICES``:
-    #   "mipas" (default): bundled MIPAS .atm, no extra files.
-    #   "gdas":  NOAA GDAS column from ``reference_profile_nc_path`` (or
-    #            auto-fetched from the FITS date/site).
+    #: Source of the reference T, P and H2O (and O3) profiles. ``"mipas"`` (default)
+    #: uses the bundled MIPAS ``.atm`` file. ``"gdas"`` uses the NOAA GDAS
+    #: analysis column for the observing date and site, read from
+    #: ``reference_profile_nc_path`` or auto-fetched from the observation MJD and
+    #: ``observatory``. Dry species always come from MIPAS.
     reference_profile_source: str = "mipas"
+    #: Path to a pre-fetched GDAS column NetCDF; ``None`` auto-fetches it.
     reference_profile_nc_path: Optional[str] = None
 
     # ---- Atmospheric winds (per-layer Doppler shift; requires GDAS source) ----
-    # When True, each layer's telluric opacity is Doppler-shifted by the GDAS
-    # line-of-sight wind before the air column is summed (first-order/derivative
-    # form, see enuma.model.forward._optical_depth). Winds are read from the same
-    # GDAS analysis as T/P/H2O, so this requires reference_profile_source="gdas".
+    #: Doppler-shift each layer's opacity by the GDAS line-of-sight wind before the
+    #: column is summed (first-order approximation; see
+    #: :mod:`enuma.model.forward`). Requires ``reference_profile_source="gdas"``.
     wind_enabled: bool = False
 
-    # Opacity grid directory. None => $ENUMA_DATA_DIR/opacities
+    #: Opacity-grid directory. ``None`` uses ``$ENUMA_DATA_DIR/opacities``, else
+    #: ``data/opacities`` in the repository.
     opacity_dir: Optional[str] = None
-    # Cache directory for fetched GDAS / stellar data. None => $ENUMA_CACHE or ~/.cache/enuma.
+    #: Cache directory for downloaded GDAS / stellar data. ``None`` uses
+    #: ``$ENUMA_CACHE``, else ``~/.cache/enuma``.
     cache_dir: Optional[str] = None
 
     # ---- Stellar template ----
-    # When enabled, a normalised PHOENIX-NewEra spectrum for (Teff, logg, [M/H],
-    # [alpha/Fe]) multiplies the transmission. Teff/logg/feh/alpha are FIXED
-    # inputs selecting the grid node
+    #: Multiply the transmission by a normalised PHOENIX-NewEra stellar spectrum,
+    #: selected by ``stellar_teff`` / ``stellar_logg`` / ``stellar_feh`` /
+    #: ``stellar_alpha`` (fixed inputs, snapped to the nearest grid node).
     stellar_enabled: bool = False
+    #: Stellar model grid; only ``"phoenix-newera"`` is available.
     stellar_grid: str = "phoenix-newera"
+    #: Stellar effective temperature (K); required when ``stellar_enabled``.
     stellar_teff: Optional[float] = None
+    #: Stellar surface gravity log g (cgs); required when ``stellar_enabled``.
     stellar_logg: Optional[float] = None
+    #: Stellar metallicity [M/H].
     stellar_feh: float = 0.0
+    #: Stellar alpha enhancement [α/Fe].
     stellar_alpha: float = 0.0
-    vsini: float = 1.0             # km/s, projected rotation (init/prior mean)
-    rv_kms: float = 0.0            # km/s, systemic RV (barycentric frame)
+    #: Projected rotation velocity vsini (km/s), the initial guess and prior mean.
+    vsini: float = 1.0
+    #: Systemic radial velocity (km/s, barycentric frame), the initial guess and
+    #: prior mean. The barycentric correction is added on top automatically.
+    rv_kms: float = 0.0
+    #: Fit the systemic RV (else fixed at ``rv_kms``).
     fit_rv: bool = True
+    #: Fit vsini (else fixed at ``vsini``).
     fit_vsini: bool = True
-    stellar_rot_half_width: int = 151   # rotation kernel half-width (model pixels)
-    stellar_epsilon: float = 0.6        # linear limb-darkening coeff
-
+    #: Half-width of the rotation kernel in model pixels; increase it for fast
+    #: rotators so the kernel covers ±vsini.
+    stellar_rot_half_width: int = 151
+    #: Linear limb-darkening coefficient of the rotation kernel.
+    stellar_epsilon: float = 0.6
 
     def __post_init__(self):
         """Canonicalise (lower-case names, tuple-convert sequences) and validate the

@@ -23,6 +23,7 @@ extensions = [
     'sphinx.ext.autodoc',
     'sphinx.ext.napoleon',
     'sphinx.ext.viewcode',
+    'sphinx.ext.extlinks',
     'sphinx_automodapi.automodapi',
     # 'nbsphinx'
 ]
@@ -34,6 +35,11 @@ napoleon_use_param = True
 napoleon_use_rtype = True
 
 numpydoc_show_class_members = False
+
+# :example:`fit_kelt9_timeseries.py` links a script in the repository's examples/.
+extlinks = {
+    "example": ("https://github.com/yapenzhang/enuma/blob/main/examples/%s", "%s"),
+}
 
 # templates_path = ['_templates']
 exclude_patterns = ['_build', 'Thumbs.db', '.DS_Store']

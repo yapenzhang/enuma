@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "enuma"
 version = "0.1.0"
 authors = [
-    {name = "Yapeng Zhang", email = "yapzhang@caltech.edu"},
+    {name = "Yapeng Zhang", email = "yazhang@mpia.de"},
 ]
 description = ""
 readme = "README.md"
@@ -48,11 +48,3 @@ package-dir = {"" = "src"}
 
 [tool.setuptools.packages.find]
 where = ["src"]
-
-[tool.pytest.ini_options]
-testpaths = ["tests"]
-addopts = "-q -m 'not slow' --ignore=tests/bench_forward.py"
-markers = [
-    "slow: end-to-end integration tests (run with -m slow)",
-    "benchmark: forward_model perf benchmark (run via `pytest tests/bench_forward.py`)",
-]

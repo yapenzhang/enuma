@@ -43,19 +43,38 @@ logger = logging.getLogger("enuma.inference.fit")
 
 class FitResult(NamedTuple):
     """Everything produced by :func:`fit_spectrum` or :func:`fit_timeseries`.
+
+    Pass ``params``, ``context`` and ``config`` to
+    :func:`~enuma.model.forward.forward_model` (single exposure) or
+    :func:`~enuma.model.forward.forward_model_batched` (time series, with
+    ``layout``) to regenerate the best-fit model.
     """
+    #: Best-fit (MAP) parameters, free and pinned, as a
+    #: :class:`~enuma.state.ModelParameters`.
     params: ModelParameters
-    sites: Dict[str, jnp.ndarray]   # optimised free + pinned site values
+    #: The same values as a flat ``{site_name: array}`` dict (e.g. ``"t_latent"``,
+    #: ``"dry_vmr_co2"``), free and pinned sites alike.
+    sites: Dict[str, jnp.ndarray]
+    #: Loss (negative ELBO) at every SVI step.
     losses: List[float]
-    data: dict                      # the original loader dict
-    obs_mask: jnp.ndarray           # boolean validity mask (after saturation cull)
+    #: The input data dict, as passed to the fit.
+    data: dict
+    #: Boolean pixel mask actually used in the likelihood, i.e. the loader mask
+    #: with saturated pixels (``saturation_mask_threshold``) removed.
+    obs_mask: jnp.ndarray
+    #: Model context (grids, opacities, reference atmosphere, GP factors, airmass).
     context: ModelContext
+    #: Static model configuration derived from ``fit_config``.
     config: ModelConfig
+    #: The :class:`~enuma.config.FitConfig` used for the fit.
     fit_config: "FitConfig"
+    #: Dry (non-H2O) species with a free or pinned column-offset parameter.
     dry_species: Tuple[str, ...]
+    #: Per-exposure layout, holding ``n_exp`` (0 for a single exposure) and the
+    #: names of the parameters that carry a leading per-exposure axis.
     layout: Layout = Layout()
-    # (recorded_steps, {site_name: trace}) from run_svi; None when plots are
-    # regenerated from a saved best-fit (no SVI history available).
+    #: Parameter traces ``(recorded_steps, {site_name: trace})`` from the SVI run,
+    #: or ``None`` when the result is rebuilt from a saved best fit.
     param_history: Optional[tuple] = None
 
     def plot(self, output_dir: str = ".", *,
@@ -80,24 +99,24 @@ class FitResult(NamedTuple):
         obs_flux = jnp.asarray(self.data["flux"])
         plot_fit_results(
             self.params, self.context, self.config, obs_flux, self.obs_mask,
-            output_path=str(out / "fit_results.pdf"),
+            output_path=str(out / "fit_results.png"),
             fit_species=self.fit_config.fit_species,
             comparison_fits=comparison_fits,
         )
         plot_instrument_diagnostics(
             self.params, self.context, self.config,
-            output_path=str(out / "fit_instrument.pdf"),
+            output_path=str(out / "fit_instrument.png"),
         )
         plot_residuals_diagnostic(
             self.params, self.context, self.config, obs_flux, self.obs_mask,
-            output_path=str(out / "fit_residuals_diagnostic.pdf"),
+            output_path=str(out / "fit_residuals_diagnostic.png"),
             comparison_fits=comparison_fits,
         )
         if self.losses:
-            plot_loss_history(self.losses, output_path=str(out / "fit_loss_history.pdf"))
+            plot_loss_history(self.losses, output_path=str(out / "fit_loss_history.png"))
         if self.param_history is not None:
             plot_param_convergence(self.param_history,
-                                   output_path=str(out / "fit_param_convergence.pdf"))
+                                   output_path=str(out / "fit_param_convergence.png"))
 
 
 def _load_observation(data: dict, fit_config: FitConfig):
@@ -328,7 +347,11 @@ def fit_spectrum(
             priors, and optimiser settings.
         print_freq: progress-bar update cadence (cosmetic).
         rng_seed: PRNG seed for SVI initialisation.
-        save_params_json_path / save_spectrum_txt_path: optional output paths.
+        save_params_json_path: where the best-fit parameters are written (JSON;
+            see :func:`~enuma.io.results.save_best_fit_params_json`).
+        save_spectrum_txt_path: where the best-fit spectrum is written (text
+            columns ``wavelength_nm flux_model flux_telluric``; see
+            :func:`~enuma.io.results.save_best_fit_spectrum_txt`).
 
     Returns:
         A :class:`FitResult`; call ``result.plot(output_dir)`` to write the PDFs.
@@ -348,7 +371,35 @@ def fit_spectrum(
 
 def fit_timeseries(data: dict, fit_config: FitConfig = FitConfig(), *,
                    print_freq: int = 10, rng_seed: int = 42) -> FitResult:
-    """Jointly fit one night of multi-exposure spectra."""
+    """Jointly fit one night of multi-exposure spectra.
+
+    All exposures are fitted together in one likelihood. The continuum is always
+    fitted per exposure. The temperature and H2O profiles, dry-species columns,
+    resolution and wavelength solution are each per exposure or shared across
+    the night, set by the ``*_per_exposure`` flags of ``fit_config``. Sharing the
+    dry-species columns lets the airmass variation over the night constrain them.
+
+    Args:
+        data: night dict from :func:`~enuma.io.data_loader.load_h5_spectra` or
+            :func:`~enuma.io.data_loader.load_fits_spectra` (3-D flux): ``wave``
+            ``(O, P)`` shared by all exposures; ``flux``/``err``/``mask``
+            ``(N, O, P)``; ``airmass`` ``(N,)``; optionally ``mjd`` and ``baryrv``
+            ``(N,)``. Without ``baryrv``, the barycentric RV is derived from the
+            target RA/DEC, the MJDs and ``fit_config.observatory``.
+        fit_config: fit configuration; see :class:`~enuma.config.FitConfig`.
+        print_freq: progress-bar update cadence (cosmetic).
+        rng_seed: PRNG seed for SVI initialisation.
+
+    Returns:
+        A :class:`FitResult` whose per-exposure parameters carry a leading ``(N,)``
+        axis (listed in ``result.layout.per_exposure``). Call
+        ``result.plot(output_dir)`` for the time-series diagnostics.
+
+    Note:
+        Unlike :func:`fit_spectrum`, nothing is written to disk. Save
+        ``result.sites`` yourself, and regenerate the model cube with
+        :func:`~enuma.model.forward.forward_model_batched`.
+    """
     n_exp = int(np.asarray(data["flux"]).shape[0])
     _pe = lambda flag: "per-exposure" if flag else "shared"
     logger.info(
