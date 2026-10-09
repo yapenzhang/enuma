@@ -177,7 +177,7 @@ def _plot_spectrum_figure(optimized_params, context, wave_nm, obs_flux_np, flux_
         fx.set_ylabel("Flux")
         fx.tick_params(labelbottom=False)
         rx.set_ylabel("Obs. - Mod.")
-        rx.set_ylim(-0.03, 0.03)
+        # rx.set_ylim(-0.03, 0.03)
         for ax in (fx, rx):
             ax.grid(True, alpha=0.25)
             ax.minorticks_on()

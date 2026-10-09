@@ -7,6 +7,7 @@ tuple, so the same runner serves the single-exposure and time-series fits.
 """
 
 import logging
+import sys
 from typing import Dict, List, Optional, Tuple
 
 import jax
@@ -127,7 +128,10 @@ def run_svi(model,
 
     logger.info("NumPyro SVI optimisation (max %d steps%s)...", max_steps,
                 ", adaptive stop" if tracker.enabled else "")
-    with tqdm(total=max_steps) as pbar:
+    # The bar redraws in place with '\r', which is only meaningful on a terminal;
+    # when stderr is redirected to a file (e.g. a batch job log) it would dump
+    # every redraw as clutter, so disable it there.
+    with tqdm(total=max_steps, disable=not sys.stderr.isatty()) as pbar:
         for i in range(max_steps):
             svi_state, loss = step(svi_state)
             losses.append(float(loss))
@@ -142,6 +146,8 @@ def run_svi(model,
                 if rec_steps[-1] != i:
                     snapshot(i)
                 break
+    logger.info("SVI finished after %d steps, final ELBO loss %.2f.",
+                len(losses), losses[-1])
 
     param_history = (
         np.asarray(rec_steps),
