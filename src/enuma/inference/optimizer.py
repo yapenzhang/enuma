@@ -37,6 +37,36 @@ def _strip_auto_loc(sites: Dict[str, jnp.ndarray]) -> Dict[str, jnp.ndarray]:
             for k, v in sites.items()}
 
 
+def _is_static(value) -> bool:
+    """Hashable model inputs (configs, layouts, name tuples, ``None``) are
+    compile-time constants of the SVI step; arrays, and containers of them, are
+    traced."""
+    try:
+        hash(value)
+    except TypeError:
+        return False
+    return True
+
+
+def _svi_step(svi: SVI, model_kwargs: dict):
+    """The jitted SVI update ``step(state, inputs)``, and the ``inputs`` to call it
+    with: the model's array inputs (context, data, pinned sites).
+
+    These go in as arguments rather than closed over. ``jax.jit`` embeds closed-over
+    arrays in the program as constants, and XLA then evaluates at compile time
+    whatever depends on them alone, such as the rotational broadening of the
+    stellar template when vsini is pinned, which is slow to fold.
+    """
+    static = {k: v for k, v in model_kwargs.items() if _is_static(v)}
+    inputs = {k: v for k, v in model_kwargs.items() if k not in static}
+
+    @jax.jit
+    def step(state, inputs):
+        return svi.update(state, **static, **inputs)
+
+    return step, inputs
+
+
 class _ConvergenceTracker:
     """Windowed-loss plateau detector for SVI early stopping.
 
@@ -105,10 +135,7 @@ def run_svi(model,
     svi = SVI(model, guide, optimizer, loss=Trace_ELBO())
 
     svi_state = svi.init(jax.random.PRNGKey(rng_seed), **model_kwargs)
-
-    @jax.jit
-    def step(state):
-        return svi.update(state, **model_kwargs)
+    step, inputs = _svi_step(svi, model_kwargs)
 
     losses: List[float] = []
     # Snapshot the MAP point every ~max_steps/200 iterations for the convergence
@@ -133,7 +160,7 @@ def run_svi(model,
     # every redraw as clutter, so disable it there.
     with tqdm(total=max_steps, disable=not sys.stderr.isatty()) as pbar:
         for i in range(max_steps):
-            svi_state, loss = step(svi_state)
+            svi_state, loss = step(svi_state, inputs)
             losses.append(float(loss))
             last = (i == max_steps - 1)
             if i % trace_every == 0 or last:

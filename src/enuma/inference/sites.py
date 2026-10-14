@@ -2,11 +2,11 @@ from dataclasses import dataclass
 from typing import Callable, Dict, Optional, Tuple
 
 import jax.numpy as jnp
-import numpy as np
 import numpyro
 import numpyro.distributions as dist
 
 from enuma.config import FitConfig
+from enuma.model.forward import resolution_loc
 from enuma.state import (
     Layout,
     ModelConfig,
@@ -44,10 +44,6 @@ def resolve_fit_species(fit_config: FitConfig) -> Tuple[str, ...]:
     return tuple(fit_config.fit_species)
 
 
-def _resolution_loc(config):
-    """Init/prior loc for the *log-space* resolution polynomial. The constant term is 
-    ``log(resolution_init)`` and the λ-dependent terms are 0."""
-    return jnp.zeros(config.n_resolution_coeffs).at[-1].set(float(np.log(config.resolution_init)))
 
 
 _T_LATENT = Param(
@@ -67,10 +63,10 @@ _H2O_LATENT = Param(
 _RESOLUTION = Param(
     "resolution_coeffs",
     init=lambda c, cfg, L: jnp.broadcast_to(
-        jnp.tile(_resolution_loc(cfg), (c.obs_wave.shape[0], 1)),
+        jnp.tile(resolution_loc(cfg), (c.obs_wave.shape[0], 1)),
         L.lead("resolution_coeffs") + (c.obs_wave.shape[0], cfg.n_resolution_coeffs)),
     prior=lambda c, cfg, L: dist.Normal(
-        _resolution_loc(cfg), jnp.asarray(cfg.resolution_prior)).expand(
+        resolution_loc(cfg), jnp.asarray(cfg.resolution_prior)).expand(
         list(L.lead("resolution_coeffs") + (c.obs_wave.shape[0], cfg.n_resolution_coeffs))),
     is_free=lambda f: f.fit_resolution,
 )

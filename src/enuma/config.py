@@ -20,7 +20,7 @@ class FitConfig:
       (:func:`~enuma.inference.fit.fit_timeseries` only).
     * **Model sizes**: polynomial degrees and continuum B-spline nodes.
     * **Instrument priors**: widths of the wavelength-shift and resolution
-      coefficients.
+      coefficients, which also set their bounds.
     * **Atmosphere**: layer grid, GP priors on the T / H2O profiles, observatory
       location, and the reference-profile source (``mipas`` / ``gdas``).
     * **Observation overrides**: ``airmass`` and ``pwv_mm`` when headers are missing
@@ -70,7 +70,7 @@ class FitConfig:
     #: Fit the H2O profile per exposure, or share it; time series only.
     h2o_per_exposure: bool = True
     #: Fit the resolution R(λ) per exposure, or share it; time series only.
-    resolution_per_exposure: bool = True
+    resolution_per_exposure: bool = False
     #: Fit the wavelength solution per exposure, or share it; time series only.
     wave_per_exposure: bool = True
 
@@ -87,11 +87,12 @@ class FitConfig:
     # ---- Instrument priors ----
     #: Prior widths (pixels) of the wavelength-shift Legendre coefficients, one per
     #: degree (constant, linear, quadratic, …); the last value repeats for higher
-    #: degrees.
-    wave_prior_pix: Tuple[float, ...] = (0.5, 0.3, 0.3)
+    #: degrees. Every wavelength-shift and resolution coefficient is bounded at its
+    #: prior width.
+    wave_prior_pix: Tuple[float, ...] = (2, 0.5, 0.5)
     #: Prior widths of the log-resolution Legendre coefficients, one per degree
     #: (constant, about ln ``resolution``; slope; …); the last value repeats.
-    resolution_prior: Tuple[float, ...] = (0.05, 0.025)
+    resolution_prior: Tuple[float, ...] = (0.5, 0.1)
 
     # ---- GP priors on the per-layer T and H2O dex deviations ----
     #: GP kernel for the temperature deviation, one of ``"matern52"``,

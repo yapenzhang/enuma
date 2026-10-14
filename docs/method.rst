@@ -157,23 +157,41 @@ to degree 1 the series is the plain polynomial ``c_0 + c_1 x``. The coefficients
 stored highest degree first, as for ``numpy.polyval``, and
 :func:`~enuma.model.forward.legendre_polyval` evaluates them.
 
-Each coefficient has a Normal prior about 0 (``ln(resolution)`` for the constant
-ln R term). The widths are given per degree, from the constant term up; the last
-value repeats for higher degrees:
+Each coefficient has a Normal prior of width ``σ`` about its mean ``μ`` (0, or
+``ln(resolution)`` for the constant ln R term), and the model uses the fitted value
+``u`` bounded at that width:
+
+.. code-block:: text
+
+    c = μ + σ · tanh((u − μ) / σ)
+
+* Well inside the bound, ``c ≈ u``: the optimiser moves the coefficients in their
+  physical units.
+* ``c`` never moves further than ``σ`` from ``μ``. Orders with few telluric lines
+  take their instrument largely from the stellar lines, where an imperfect stellar
+  template could otherwise drive R or the shift to unphysical values.
+
+The widths are given per degree, from the constant term up; the last value repeats
+for higher degrees:
 
 .. list-table::
    :header-rows: 1
    :widths: 40 30 30
 
    * - Coefficients
-     - Widths (default)
+     - Widths = bounds (default)
      - Field
    * - wavelength shift (pixels)
-     - 0.5, 0.3, 0.3
+     - 2, 0.5, 0.5
      - ``wave_prior_pix``
    * - ln R
-     - 0.05, 0.025
+     - 0.2, 0.08
      - ``resolution_prior``
+
+Since ``|P_k(x)| ≤ 1`` on [−1, 1], the shift never exceeds the sum of its bounds
+(3 pixels with the defaults). The mean R of an order stays within
+``exp(±0.2) ≈ 0.82–1.22`` of ``resolution``, so set ``resolution`` close to the
+instrument's resolving power.
 
 Continuum
 ---------

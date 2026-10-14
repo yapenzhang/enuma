@@ -3,6 +3,7 @@ from typing import Dict, Tuple
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 
 from enuma.constants import (G_EARTH, LSF_FWHM_TO_SIGMA, MATMUL_PRECISION, MMW_DRY_AIR,
                              MMW_H2O)
@@ -16,6 +17,9 @@ __all__ = [
     "apply_variable_lsf",
     "apply_custom_lsf",
     "legendre_polyval",
+    "bounded",
+    "resolution_loc",
+    "instrument_coeffs",
     "expand_tp_profiles",
     "net_stellar_rv",
     "get_layer_properties",
@@ -117,7 +121,7 @@ def apply_custom_lsf(model_flux: jnp.ndarray, kernel: jnp.ndarray) -> jnp.ndarra
 
 # ---------------------------------------------------------------------------
 # Instrument polynomials: the wavelength shift and ln R are Legendre series on an
-# intra-order coordinate in [-1, 1].
+# intra-order coordinate in [-1, 1], each coefficient bounded about its prior mean.
 # ---------------------------------------------------------------------------
 
 def legendre_polyval(coeffs, x):
@@ -135,6 +139,28 @@ def legendre_polyval(coeffs, x):
             p_prev, p = p, ((2 * k - 1) * x * p - (k - 1) * p_prev) / k
         out = out + c[k] * p
     return out
+
+
+def bounded(u: jnp.ndarray, loc, bound) -> jnp.ndarray:
+    """``loc + bound · tanh((u − loc) / bound)``: about ``u`` well inside the bound,
+    never further than ``bound`` from ``loc``."""
+    return loc + bound * jnp.tanh((u - loc) / bound)
+
+
+def resolution_loc(config: ModelConfig) -> jnp.ndarray:
+    """Prior mean of the log-resolution coefficients: ``log(resolution_init)`` for
+    the constant term, 0 for the λ-dependent terms."""
+    return jnp.zeros(config.n_resolution_coeffs).at[-1].set(float(np.log(config.resolution_init)))
+
+
+def instrument_coeffs(params: ModelParameters,
+                      config: ModelConfig) -> Tuple[jnp.ndarray, jnp.ndarray]:
+    """The wavelength-shift (pixels) and log-resolution coefficients the model uses:
+    each fitted coefficient bounded at its prior width about its prior mean."""
+    wave = bounded(params.wave_coeffs, 0.0, jnp.asarray(config.wave_prior_pix))
+    res = bounded(params.resolution_coeffs, resolution_loc(config),
+                  jnp.asarray(config.resolution_prior))
+    return wave, res
 
 
 def expand_tp_profiles(ctx: ModelContext, params: ModelParameters
@@ -318,8 +344,9 @@ def _transmission(params: ModelParameters, ctx: ModelContext,
     x_pix = jnp.linspace(-1.0, 1.0, config.order_size)
     process = partial(_process_order, y_trans=y_trans, x_pix=x_pix, config=config,
                       lsf_kernel=ctx.lsf_kernel)
+    wave_coeffs, res_coeffs = instrument_coeffs(params, config)
     return jax.vmap(process)(
-        params.wave_coeffs, params.resolution_coeffs,
+        wave_coeffs, res_coeffs,
         ctx.order_d_wave, ctx.obs_d_wave, ctx.order_start_idx, ctx.obs_wave_norm,
         ctx.model_wave_off, ctx.obs_wave_off, ctx.order_ref_wave,
     )

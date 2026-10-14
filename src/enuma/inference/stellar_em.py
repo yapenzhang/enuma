@@ -27,7 +27,7 @@ from enuma.config import FitConfig
 from enuma.inference import stellar_gp as sg
 from enuma.inference.fit import FitResult, _fit_full, _optimize, _prepare
 from enuma.inference.sites import partition_sites
-from enuma.model.forward import legendre_polyval
+from enuma.model.forward import bounded, legendre_polyval
 from enuma.model.opacity import get_opacities
 from enuma.model.setup import _opacity_wave_range, _slice_opacities
 from enuma.state import sites_to_params
@@ -111,9 +111,12 @@ def _seed_sites(free_init: dict, fixed: dict, initial: FitResult) -> dict:
     return sites
 
 
-def _max_wave_shift_pix(sites: dict, ctx) -> float:
-    """Largest wavelength-solution shift (pixels) in a set of sites."""
-    coeffs = np.asarray(sites["wave_coeffs"])                     # (O, k) or (N, O, k)
+def _max_wave_shift_pix(sites: dict, ctx, config) -> float:
+    """Largest wavelength-solution shift (pixels) in a set of sites, with the
+    coefficients bounded as the model uses them."""
+    coeffs = np.asarray(bounded(jnp.asarray(sites["wave_coeffs"]), 0.0,
+                                jnp.asarray(config.wave_prior_pix)))
+    # coeffs: (O, k), or (N, O, k) per exposure
     x = np.asarray(ctx.obs_wave_norm)                             # (O, P)
     coeffs = coeffs.reshape((-1,) + coeffs.shape[-2:])
     shifts = [legendre_polyval(c, x[o]) for exp in coeffs for o, c in enumerate(exp)]
@@ -213,7 +216,8 @@ def fit_nights(datasets: Sequence[dict], fit_config: FitConfig = FitConfig(), *,
     _warn_degeneracies(fc, velocities)
 
     # Node ranges absorb the seed's wavelength shifts with room for the refits.
-    seed_shift = max(_max_wave_shift_pix(s, n.prep.context) for s, n in zip(sites, nights))
+    seed_shift = max(_max_wave_shift_pix(s, n.prep.context, n.prep.config)
+                     for s, n in zip(sites, nights))
     margin_pix = max(16.0, 1.5 * seed_shift + 8.0)
     grid = sg.build_stellar_grid([n.model_wave for n in nights],
                                  [np.asarray(n.data["wave"], np.float64) for n in nights],
@@ -254,7 +258,7 @@ def fit_nights(datasets: Sequence[dict], fit_config: FitConfig = FitConfig(), *,
                 params, night.prep.context, night.prep.config, night.prep.layout,
                 night.obs_flux, night.obs_w, beta0, night.geom, night.spec)
             if bool(overflow):
-                shift = _max_wave_shift_pix(s, night.prep.context)
+                shift = _max_wave_shift_pix(s, night.prep.context, night.prep.config)
                 raise RuntimeError(
                     "A pixel's template window fell outside its node row: the fitted "
                     f"wavelength-solution shifts (up to {shift:.1f} pixels) outgrew the "

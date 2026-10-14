@@ -172,7 +172,8 @@ class ModelConfig(NamedTuple):
     resolution_init: float = 0.6     # prior mean of the constant R term (×1e5)
     n_wave_coeffs: int = 3
     # Prior widths of the wave-shift and log-resolution coefficients, one per
-    # coefficient in polynomial order (highest degree first, as ``wave_coeffs``).
+    # coefficient in polynomial order (highest degree first, as ``wave_coeffs``);
+    # they also set the bounds (see ``forward.instrument_coeffs``).
     wave_prior_pix: Tuple[float, ...] = (0.3, 0.3, 0.5)
     resolution_prior: Tuple[float, ...] = (0.025, 0.05)
     lsf_profile: str = "gaussian"    # "gaussian" or "voigt"

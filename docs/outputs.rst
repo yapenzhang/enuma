@@ -96,8 +96,11 @@ leading ``(N,)`` axis.
      - Per-order Legendre series (highest degree first) for the wavelength-solution
        correction, in **pixels**, with x from −1 to 1 across the order.
 
-       :func:`~enuma.model.forward.legendre_polyval` evaluates either series (see
-       :ref:`method`).
+       The model uses each wavelength-shift and resolution coefficient bounded about
+       its prior mean (see :ref:`method`); the saved values are the fitted ones
+       before the bound. :func:`~enuma.model.forward.instrument_coeffs` gives the
+       bounded ones, and :func:`~enuma.model.forward.legendre_polyval` evaluates
+       either series.
    * - ``continuum_coeffs``
      - ``(O, continuum_n_nodes)``
      - Weights of the per-order cubic B-spline continuum (about 1 for normalised
