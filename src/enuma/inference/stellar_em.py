@@ -25,9 +25,9 @@ import numpy as np
 
 from enuma.config import FitConfig
 from enuma.inference import stellar_gp as sg
-from enuma.inference.diagnostics import instrument_report
 from enuma.inference.fit import FitResult, _fit_full, _optimize, _prepare
 from enuma.inference.sites import partition_sites
+from enuma.model.forward import bounded
 from enuma.model.opacity import get_opacities
 from enuma.model.setup import _opacity_wave_range, _slice_opacities
 from enuma.state import sites_to_params
@@ -85,10 +85,8 @@ def _initial_fit(data: dict, fit_config: FitConfig, opacities, *, print_freq, rn
     logger.info("Initial fit with the %s.", "NewEra template" if use_newera else
                 "tellurics only (no stellar_teff/logg)")
     n_exp = int(np.asarray(data["flux"]).shape[0])
-    result = _fit_full(data, fc1, n_exp, print_freq=print_freq, rng_seed=rng_seed,
-                       opacities=opacities)
-    instrument_report(result)
-    return result
+    return _fit_full(data, fc1, n_exp, print_freq=print_freq, rng_seed=rng_seed,
+                     opacities=opacities)
 
 
 def _observation_arrays(prep):
@@ -113,11 +111,16 @@ def _seed_sites(free_init: dict, fixed: dict, initial: FitResult) -> dict:
     return sites
 
 
-def _wave_shift_bound_pix(config) -> float:
-    """Largest wavelength-solution shift (pixels) the bounded instrument terms allow:
-    every Legendre term and the per-exposure offset at their bounds."""
-    return config.instrument_bound_sigmas * (sum(config.wave_prior_pix)
-                                             + config.wave_drift_prior_pix)
+def _max_wave_shift_pix(sites: dict, ctx, config) -> float:
+    """Largest wavelength-solution shift (pixels) in a set of sites, with the
+    coefficients bounded as the model uses them."""
+    bound = config.instrument_bound_sigmas * jnp.asarray(config.wave_prior_pix)
+    coeffs = np.asarray(bounded(jnp.asarray(sites["wave_coeffs"]), 0.0, bound))
+    # coeffs: (O, k), or (N, O, k) per exposure
+    x = np.asarray(ctx.obs_wave_norm)                             # (O, P)
+    coeffs = coeffs.reshape((-1,) + coeffs.shape[-2:])
+    shifts = [np.polyval(c, x[o]) for exp in coeffs for o, c in enumerate(exp)]
+    return float(np.max(np.abs(shifts)))
 
 
 def _warn_degeneracies(fit_config: FitConfig, velocities: Sequence[np.ndarray]) -> None:
@@ -212,9 +215,10 @@ def fit_nights(datasets: Sequence[dict], fit_config: FitConfig = FitConfig(), *,
         velocities.append(rv + np.asarray(ctx.baryrv, np.float64))
     _warn_degeneracies(fc, velocities)
 
-    # Node ranges absorb any wavelength shift the bounded instrument terms allow.
-    shift_bound = max(_wave_shift_bound_pix(n.prep.config) for n in nights)
-    margin_pix = max(16.0, 1.5 * shift_bound + 8.0)
+    # Node ranges absorb the seed's wavelength shifts with room for the refits.
+    seed_shift = max(_max_wave_shift_pix(s, n.prep.context, n.prep.config)
+                     for s, n in zip(sites, nights))
+    margin_pix = max(16.0, 1.5 * seed_shift + 8.0)
     grid = sg.build_stellar_grid([n.model_wave for n in nights],
                                  [np.asarray(n.data["wave"], np.float64) for n in nights],
                                  velocities, node_kms=fc.stellar_node_kms,
@@ -254,10 +258,11 @@ def fit_nights(datasets: Sequence[dict], fit_config: FitConfig = FitConfig(), *,
                 params, night.prep.context, night.prep.config, night.prep.layout,
                 night.obs_flux, night.obs_w, beta0, night.geom, night.spec)
             if bool(overflow):
+                shift = _max_wave_shift_pix(s, night.prep.context, night.prep.config)
                 raise RuntimeError(
-                    "A pixel's template window fell outside its node row, although the "
-                    f"wavelength-solution shift is bounded at {shift_bound:.1f} pixels and "
-                    f"the template's node margins are {margin_pix:.0f} pixels.")
+                    "A pixel's template window fell outside its node row: the fitted "
+                    f"wavelength-solution shifts (up to {shift:.1f} pixels) outgrew the "
+                    f"template's node margins ({margin_pix:.0f} pixels).")
             G, b, chi2_0 = ((Gi, bi, ci) if G is None else (G + Gi, b + bi, chi2_0 + ci))
         t1 = time.time()
         # The hyperparameters follow the tellurics: refit them in every star step.
@@ -316,6 +321,5 @@ def fit_nights(datasets: Sequence[dict], fit_config: FitConfig = FitConfig(), *,
             layout=night.prep.layout,
             param_history=None if last is None else last.param_history,
             stellar=template, stellar_history=history))
-        instrument_report(out[-1])
     return MultiNightResult(nights=tuple(out), stellar=template, history=history,
                             initial=initial)

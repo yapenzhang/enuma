@@ -5,7 +5,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from enuma.model.forward import forward_model, instrument_terms, telluric_only
+from enuma.model.forward import forward_model, telluric_only
 from enuma.state import ModelConfig, ModelContext, ModelParameters, sites_to_params
 
 __all__ = [
@@ -35,25 +35,11 @@ def save_best_fit_params_json(
     *,
     species: Optional[Tuple[str, ...]] = None,
     metadata: Optional[Dict[str, str]] = None,
-    config: Optional[ModelConfig] = None,
 ) -> None:
-    """Save best-fit parameters to a human-readable JSON file.
-
-    With ``config``, an ``instrument`` block also gives the instrument terms in
-    physical units (:func:`~enuma.model.forward.instrument_terms`): the static shift
-    (pixels) and ln(R / R₀) Legendre terms per order, their per-exposure offsets, R₀,
-    and each order's R level ``R₀·exp(ln-R constant term)``. Loading ignores it.
-    """
+    """Save best-fit parameters to a human-readable JSON file."""
     if species is None:
         species = ("h2o", *params.dry_vmr_scalars.keys())
     payload = {"species": list(species), "params": _jsonify(params._asdict())}
-    if config is not None:
-        t = instrument_terms(params, config)
-        r0 = 1e5 * config.resolution_init
-        payload["instrument"] = _jsonify(dict(
-            shift_px=t.wave, shift_drift_px=t.wave_drift, log_r=t.log_r,
-            log_r_drift=t.log_r_drift, resolution_r0=r0,
-            resolution_level=r0 * np.exp(np.asarray(t.log_r)[:, 0])))
     if metadata:
         payload["metadata"] = {k: str(v) for k, v in metadata.items()}
     with open(path, "w", encoding="utf-8") as f:
@@ -74,11 +60,6 @@ def load_best_fit_params_json(
         raise ValueError("Missing 'species' in JSON; pass species explicitly.")
 
     raw = payload["params"]
-    if "wave_coeffs" in raw or "resolution_coeffs" in raw:
-        raise ValueError(
-            f"{path} was saved with the old instrument parametrization (monomial "
-            "'wave_coeffs' / 'resolution_coeffs'). The wavelength solution and resolution "
-            "are now bounded Legendre terms; refit the spectrum to use it with this version.")
     sites = {k: jnp.asarray(v) for k, v in raw.items() if k != "dry_vmr_scalars"}
     for s, v in raw.get("dry_vmr_scalars", {}).items():
         sites[f"dry_vmr_{s}"] = jnp.asarray(v)

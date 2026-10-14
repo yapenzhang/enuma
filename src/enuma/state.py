@@ -41,26 +41,17 @@ class Layout:
 
 
 class ModelParameters(NamedTuple):
-    """Everything the fit optimises (JAX differentiates through these).
-
-    The wavelength-solution (pixels) and resolution (ln R) terms are bounded by the
-    forward model before use (:func:`enuma.model.forward.instrument_terms`).
-    """
+    """Everything the fit optimises (JAX differentiates through these)."""
     t_latent: jnp.ndarray                    # (n_active,) active bottom layers, ≤ n_layers-1
     h2o_latent: jnp.ndarray                  # (n_active,) active bottom layers, ≤ n_layers-1
     dry_vmr_scalars: Dict[str, jnp.ndarray]  # per-species scalar log10 offsets
-    wave_terms: jnp.ndarray                  # (n_orders, n_wave_coeffs) static shift, Legendre, pixels
-    resolution_terms: jnp.ndarray            # (n_orders, n_resolution_coeffs) static ln(R/R₀), Legendre
+    wave_coeffs: jnp.ndarray                 # (n_orders, n_wave_coeffs)
+    resolution_coeffs: jnp.ndarray           # (n_orders, n_resolution_coeffs)
     continuum_coeffs: jnp.ndarray            # (n_orders, n_cont_nodes)
     # Only used when ``ModelConfig.stellar_enabled``; otherwise pinned constants
     # the forward model ignores.
     rv_systemic: jnp.ndarray = np.array(0.0, np.float32)  # scalar, km/s
     vsini: jnp.ndarray = np.array(1.0, np.float32)        # scalar, km/s
-    # Per-exposure instrument drifts of a night, centred over the night: the
-    # wavelength offset of each order (N, n_orders) and the ln R offset shared by all
-    # orders (N,). Zero for a single exposure.
-    wave_drift: jnp.ndarray = np.array(0.0, np.float32)
-    resolution_drift: jnp.ndarray = np.array(0.0, np.float32)
 
 
 # The structured leaf that fans out to per-species flat sites, and the flat-key
@@ -136,11 +127,6 @@ class ModelContext(NamedTuple):
     order_ref_wave: jnp.ndarray     # (n_orders,) per-order reference wavelength
     model_wave_off: jnp.ndarray     # (n_orders, order_size) model grid − ref
     obs_wave_off: jnp.ndarray       # (n_orders, n_pixels) obs grid − ref
-    # Centre and half-width of each observed order in offset space: the map
-    # x = (λ − ref − centre) / half_width behind ``obs_wave_norm``, which the
-    # resolution polynomial also uses on the model grid.
-    order_norm_center: jnp.ndarray  # (n_orders,)
-    order_norm_half: jnp.ndarray    # (n_orders,)
 
     # Cholesky factors of the per-layer GP priors (built once at setup, with
     # amplitude/length-scale/kernel baked in). In the non-centered
@@ -180,17 +166,16 @@ class ModelConfig(NamedTuple):
     # Constant-sigma chunks the variable-sigma LSF splits each order into.
     lsf_n_chunks: int = 20
     order_size: int = 20000          # per-order extent in model-grid samples
-    # Legendre term counts (degree+1) for ln R(λ) and the wave shift, evaluated on
-    # an intra-order coordinate in [-1, 1]; each order independent.
+    # Polynomial coefficient counts (degree+1) for R(λ) and the wave shift,
+    # evaluated on an intra-order coordinate in [-1, 1]; each order independent.
     n_resolution_coeffs: int = 2
-    resolution_init: float = 0.6     # R₀ (×1e5), the centre of the R prior
+    resolution_init: float = 0.6     # prior mean of the constant R term (×1e5)
     n_wave_coeffs: int = 3
-    # Prior widths of the instrument terms (one per Legendre degree for the static
-    # terms) and the bound in units of those widths.
-    wave_prior_pix: Tuple[float, ...] = (0.5, 0.3, 0.3)
-    wave_drift_prior_pix: float = 0.25
-    resolution_prior: Tuple[float, ...] = (0.2, 0.075)
-    resolution_drift_prior: float = 0.05
+    # Prior widths of the wave-shift and log-resolution coefficients, one per
+    # coefficient in polynomial order (highest degree first, as ``wave_coeffs``), and
+    # the bound in units of those widths (see ``forward.instrument_coeffs``).
+    wave_prior_pix: Tuple[float, ...] = (0.3, 0.3, 0.5)
+    resolution_prior: Tuple[float, ...] = (0.025, 0.05)
     instrument_bound_sigmas: float = 4.0
     lsf_profile: str = "gaussian"    # "gaussian" or "voigt"
     lsf_voigt_gamma_ratio: float = 0.01

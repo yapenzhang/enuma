@@ -29,13 +29,6 @@ SVI optimizer
    :no-inheritance-diagram:
 
 
-Instrument report
------------------
-
-.. automodapi:: enuma.inference.diagnostics
-   :no-inheritance-diagram:
-
-
 Learned stellar template
 ------------------------
 

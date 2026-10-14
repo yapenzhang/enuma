@@ -16,11 +16,9 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from enuma.model.forward import (
-    NIGHT_TERMS,
-    centre_night_terms,
     expand_tp_profiles,
     forward_model_batched,
-    instrument_terms,
+    instrument_coeffs,
 )
 from enuma.plotting.spectrum import (
     plot_instrument_diagnostics,
@@ -254,9 +252,7 @@ def plot_timeseries_parameters(result, output_path: str = "timeseries_parameters
     per-exposure dry-species relative columns, an H2O-column proxy (mean H2O dex
     over the sensitive layers), and a temperature proxy (mean ΔT/T over those
     layers). Airmass is overlaid on the dry-species and H2O panels (twin axis) so
-    transparency correlations are visible. The bottom row shows the per-exposure
-    instrument drifts about their night means: the wavelength drift of each order and
-    the resolution factor shared by all orders. Shared scalars (vsini, systemic RV,
+    transparency correlations are visible. Shared scalars (vsini, systemic RV,
     mean R) are annotated in the title.
 
     ``result`` is a :class:`enuma.inference.fit.FitResult` from a time-series fit.
@@ -291,9 +287,7 @@ def plot_timeseries_parameters(result, output_path: str = "timeseries_parameters
         axt.tick_params(axis="y", labelcolor="0.5", labelsize="small")
         return axt
 
-    fig, grid = plt.subplots(2, 3, figsize=(15, 8), sharex=True, constrained_layout=True)
-    axes, inst = grid[0], grid[1][:2]
-    grid[1][2].set_visible(False)
+    fig, axes = plt.subplots(1, 3, figsize=(15, 4), sharex=True, constrained_layout=True)
 
     # Panel 0: dry-species relative columns + airmass twin.
     for i, (s, rel, per_exp) in enumerate(dry_traces):
@@ -316,29 +310,14 @@ def plot_timeseries_parameters(result, output_path: str = "timeseries_parameters
     # axes[2].axhline(0.0, color="k", ls=":", lw=0.8, alpha=0.6)
     axes[2].set(ylabel=r"Mean $\Delta T/T_{\rm ref}$ [%]", title="Temperature proxy")
 
-    # Bottom row: the per-exposure instrument drifts (night mean 0).
-    cfg = result.config
-    terms = jax.tree_util.tree_map(np.asarray, instrument_terms(
-        centre_night_terms(p, result.layout), cfg))
-    n_ord = terms.wave.shape[0]
-    drift = np.broadcast_to(terms.wave_drift, (n_exp, n_ord))
-    r_factor = np.exp(np.broadcast_to(terms.log_r_drift, (n_exp,)))
-    colors = plt.cm.viridis(np.linspace(0.0, 1.0, n_ord))
-    for o in range(n_ord):
-        inst[0].plot(x, drift[:, o], "-", color=colors[o], lw=0.9)
-    inst[0].set(ylabel="Shift about the night mean (pixels)",
-                title="Wavelength drift, one line per order")
-    inst[1].plot(x, r_factor, "C2.-", lw=1.2)
-    inst[1].set(ylabel=r"$R / R_{\rm night}$", title="Resolution factor (all orders)")
-    _airmass_twin(inst[1])
-
-    for ax in (*axes, *inst):
+    for ax in axes:
         ax.grid(True, alpha=0.3); ax.minorticks_on()
         ax.set_xlabel(xlabel)
 
     vsini = float(np.asarray(jax.device_get(p.vsini)))
     rv_sys = float(np.asarray(jax.device_get(result.sites["rv_systemic"])).reshape(-1)[0])
-    mean_R = 1e5 * cfg.resolution_init * float(np.exp(np.mean(terms.log_r[:, 0])))
+    _, res_coeffs = instrument_coeffs(p, result.config)
+    mean_R = 1e5 * float(np.exp(np.mean(np.asarray(res_coeffs)[..., -1])))
     fig.suptitle(f"Time-series parameters — shared: vsini={vsini:.2f} km/s, "
                  f"systemic RV={rv_sys:.2f} km/s, mean R≈{mean_R:,.0f}", fontsize=12)
     fig.savefig(output_path)
@@ -361,13 +340,16 @@ def plot_timeseries_diagnostics(result, output_dir: str) -> None:
     plot_timeseries_profiles(result, output_path=str(out / "profiles.pdf"))
     plot_timeseries_parameters(result, output_path=str(out / "parameters.pdf"))
     # The instrument diagnostic is a single-exposure plot (R(λ)/wave shift per
-    # order): show the static terms, i.e. the night mean, with the per-exposure
-    # drifts (in the parameter timelines) set to zero.
+    # order). The LSF/wave coeffs are usually shared (O, ...); when fit per exposure
+    # (resolution_per_exposure / wave_per_exposure) they are (N, O, ...), so collapse
+    # the exposure axis to the night-mean for display.
     p = result.params
-    inst_params = p._replace(**{name: jnp.zeros_like(getattr(p, name))[0]
-                                if name in result.layout.per_exposure
-                                else jnp.zeros_like(getattr(p, name))
-                                for name in NIGHT_TERMS})
+    inst_params = p._replace(
+        resolution_coeffs=(p.resolution_coeffs.mean(axis=0)
+                           if p.resolution_coeffs.ndim == 3 else p.resolution_coeffs),
+        wave_coeffs=(p.wave_coeffs.mean(axis=0)
+                     if p.wave_coeffs.ndim == 3 else p.wave_coeffs),
+    )
     plot_instrument_diagnostics(inst_params, result.context, result.config,
                                 output_path=str(out / "instrument.pdf"))
     if result.losses:

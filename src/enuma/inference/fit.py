@@ -21,7 +21,6 @@ from enuma.inference.sites import (
     per_exposure_sites,
     resolve_fit_species,
 )
-from enuma.inference.diagnostics import instrument_report
 from enuma.inference.optimizer import run_svi
 from enuma.state import (
     Layout,
@@ -177,9 +176,7 @@ def _run_svi(model_kwargs: dict, init_values: Dict[str, jnp.ndarray],
     )
 
 
-# Sites with one entry per order, and the axis that indexes the order.
-_PER_ORDER_SITES = {"resolution_terms": -2, "wave_terms": -2, "continuum_coeffs": -2,
-                    "wave_drift": -1}
+_PER_ORDER_SITES = ("resolution_coeffs", "wave_coeffs", "continuum_coeffs")
 
 
 def _take_orders(data: dict, order_idx: np.ndarray) -> dict:
@@ -192,10 +189,9 @@ def _take_orders(data: dict, order_idx: np.ndarray) -> dict:
     return out
 
 
-def _set_orders(base: jnp.ndarray, order_idx: np.ndarray, rows: jnp.ndarray,
-                axis: int = -2) -> jnp.ndarray:
-    """``base`` with its order-axis entries at ``order_idx`` replaced by ``rows``."""
-    sl = (slice(None),) * (base.ndim + axis) + (jnp.asarray(order_idx),)
+def _set_orders(base: jnp.ndarray, order_idx: np.ndarray, rows: jnp.ndarray) -> jnp.ndarray:
+    """``base`` with its order-axis (-2) entries at ``order_idx`` replaced by ``rows``."""
+    sl = (slice(None),) * (base.ndim - 2) + (jnp.asarray(order_idx),)
     return base.at[sl].set(rows)
 
 
@@ -227,7 +223,7 @@ def _scatter_to_full(sub_params: ModelParameters, full_context: ModelContext,
     sub_sites = params_to_sites(sub_params)
     out: Dict[str, jnp.ndarray] = {}
     for name, default_val in full_default.items():
-        out[name] = (_set_orders(default_val, order_idx, sub_sites[name], _PER_ORDER_SITES[name])
+        out[name] = (_set_orders(default_val, order_idx, sub_sites[name])
                      if name in _PER_ORDER_SITES else sub_sites[name])
     return sites_to_params(out, dry_species)
 
@@ -252,7 +248,7 @@ def _refit_nuisance(seeded_params: ModelParameters, data: dict, rest_idx: np.nda
         name = site.name
         if name not in _PER_ORDER_SITES:
             fixed_values[name] = seeded_sites[name]        # frozen stage-1 atmosphere
-        elif name in rest_free:
+        elif site.is_free(fit_config):
             init_values[name] = rest_free[name]            # nuisance to fit
         else:
             fixed_values[name] = rest_fixed[name]          # pinned nuisance
@@ -265,9 +261,9 @@ def _refit_nuisance(seeded_params: ModelParameters, data: dict, rest_idx: np.nda
              fixed_values=fixed_values),
         init_values, fit_config, print_freq=print_freq, rng_seed=rng_seed)
 
-    for name, axis in _PER_ORDER_SITES.items():
+    for name in _PER_ORDER_SITES:
         if name in opt_sites:
-            seeded_sites[name] = _set_orders(seeded_sites[name], rest_idx, opt_sites[name], axis)
+            seeded_sites[name] = _set_orders(seeded_sites[name], rest_idx, opt_sites[name])
     return sites_to_params(seeded_sites, dry_species)
 
 
@@ -405,10 +401,8 @@ def fit_spectrum(
         fit_config.max_steps, jax.default_backend().upper()
     )
     result = _run_fit(data, fit_config, 0, print_freq=print_freq, rng_seed=rng_seed)
-    instrument_report(result)
-
-    save_best_fit_params_json(result.params, save_params_json_path, species=fit_config.species,
-                              config=result.config)
+    
+    save_best_fit_params_json(result.params, save_params_json_path, species=fit_config.species)
     save_best_fit_spectrum_txt(result.params, result.context, result.config,
                                    save_spectrum_txt_path)
     return result
@@ -464,7 +458,6 @@ def fit_timeseries(data: dict, fit_config: FitConfig = FitConfig(), *,
     )
 
     result = _run_fit(data, fit_config, n_exp, print_freq=print_freq, rng_seed=rng_seed)
-    instrument_report(result)
 
     #TODO: save best-fit params and models
 

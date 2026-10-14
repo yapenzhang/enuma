@@ -1,8 +1,9 @@
 from functools import partial
-from typing import Dict, NamedTuple, Tuple
+from typing import Dict, Tuple
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 
 from enuma.constants import (G_EARTH, LSF_FWHM_TO_SIGMA, MATMUL_PRECISION, MMW_DRY_AIR,
                              MMW_H2O)
@@ -13,17 +14,11 @@ from enuma.state import Layout, ModelConfig, ModelContext, ModelParameters
 __all__ = [
     "LSF_PROFILE_CHOICES",
     "OPACITY_GRID_R",
-    "NIGHT_TERMS",
     "apply_variable_lsf",
     "apply_custom_lsf",
-    "legendre_basis",
     "bounded",
-    "InstrumentTerms",
-    "instrument_terms",
-    "centre_night_terms",
-    "wave_shift_pix",
-    "log_resolution",
-    "continuum_model",
+    "resolution_loc",
+    "instrument_coeffs",
     "expand_tp_profiles",
     "net_stellar_rv",
     "get_layer_properties",
@@ -124,90 +119,32 @@ def apply_custom_lsf(model_flux: jnp.ndarray, kernel: jnp.ndarray) -> jnp.ndarra
 
 
 # ---------------------------------------------------------------------------
-# Instrument terms. The wavelength shift and ln R of each order are a static
-# Legendre series in x ∈ [−1, 1] across the observed order plus, in a night, a
-# per-exposure offset (the shift's per order, ln R's shared by all orders). The
-# fitted values are in pixels and ln R; the model uses them through ``bounded``.
+# Instrument coefficients: every wavelength-shift and log-resolution coefficient
+# enters the model bounded about its prior mean (``bounded``).
 # ---------------------------------------------------------------------------
 
-#: Per-exposure terms of a night; they are centred over the night before use, so
-#: the static terms carry the night means.
-NIGHT_TERMS = ("wave_drift", "resolution_drift")
+def bounded(u: jnp.ndarray, loc, bound) -> jnp.ndarray:
+    """``loc + bound · tanh((u − loc) / bound)``: about ``u`` well inside the bound,
+    never further than ``bound`` from ``loc``."""
+    return loc + bound * jnp.tanh((u - loc) / bound)
 
 
-def legendre_basis(x: jnp.ndarray, n: int) -> jnp.ndarray:
-    """Legendre polynomials ``P_0 … P_{n−1}`` at ``x``, stacked on a new last axis."""
-    p = [jnp.ones_like(x), x][:n]
-    for k in range(1, n - 1):
-        p.append(((2 * k + 1) * x * p[k] - k * p[k - 1]) / (k + 1))
-    return jnp.stack(p, axis=-1)
+def resolution_loc(config: ModelConfig) -> jnp.ndarray:
+    """Prior mean of the log-resolution coefficients: ``log(resolution_init)`` for
+    the constant term, 0 for the λ-dependent terms."""
+    return jnp.zeros(config.n_resolution_coeffs).at[-1].set(float(np.log(config.resolution_init)))
 
 
-def bounded(u: jnp.ndarray, bound) -> jnp.ndarray:
-    """``bound · tanh(u / bound)``: about ``u`` well inside the bound, never beyond it."""
-    return bound * jnp.tanh(u / bound)
-
-
-class InstrumentTerms(NamedTuple):
-    """Bounded instrument terms, with the leading axes of their parameters."""
-    wave: jnp.ndarray         # (O, n_wave_coeffs) static shift, Legendre terms (pixels)
-    wave_drift: jnp.ndarray   # per-exposure shift of each order (pixels)
-    log_r: jnp.ndarray        # (O, n_resolution_coeffs) static ln(R / R₀), Legendre terms
-    log_r_drift: jnp.ndarray  # per-exposure ln R offset, shared by all orders
-
-
-def instrument_terms(params: ModelParameters, config: ModelConfig) -> InstrumentTerms:
-    """The instrument terms of ``params`` as the model uses them: each fitted value
-    through ``bounded``, at ``instrument_bound_sigmas`` times its prior width."""
+def instrument_coeffs(params: ModelParameters,
+                      config: ModelConfig) -> Tuple[jnp.ndarray, jnp.ndarray]:
+    """The wavelength-shift (pixels) and log-resolution coefficients the model uses:
+    each fitted coefficient bounded at ``instrument_bound_sigmas`` times its prior
+    width about its prior mean."""
     c = config.instrument_bound_sigmas
-    return InstrumentTerms(
-        wave=bounded(params.wave_terms, c * jnp.asarray(config.wave_prior_pix)),
-        wave_drift=bounded(params.wave_drift, c * config.wave_drift_prior_pix),
-        log_r=bounded(params.resolution_terms, c * jnp.asarray(config.resolution_prior)),
-        log_r_drift=bounded(params.resolution_drift, c * config.resolution_drift_prior),
-    )
-
-
-def centre_night_terms(params: ModelParameters, layout: Layout) -> ModelParameters:
-    """``params`` with the night mean of each per-exposure term removed (per order).
-    A single exposure, or a term shared over the night, passes through."""
-    if not layout.n_exp:
-        return params
-    return params._replace(**{
-        name: getattr(params, name) - jnp.mean(getattr(params, name), axis=0, keepdims=True)
-        for name in NIGHT_TERMS if name in layout.per_exposure})
-
-
-def _order_shift(wave, wave_drift, x):
-    """Shift (pixels) of one order at the intra-order coordinate ``x``."""
-    return jnp.sum(legendre_basis(x, wave.shape[-1]) * wave, axis=-1) + wave_drift
-
-
-def _order_log_r(log_r, log_r_drift, x):
-    """ln(R / R₀) of one order at the intra-order coordinate ``x``."""
-    return jnp.sum(legendre_basis(x, log_r.shape[-1]) * log_r, axis=-1) + log_r_drift
-
-
-def _model_norm(ctx: ModelContext) -> jnp.ndarray:
-    """The intra-order coordinate of every model-grid sample, ``(O, order_size)``."""
-    return (ctx.model_wave_off - ctx.order_norm_center[:, None]) / ctx.order_norm_half[:, None]
-
-
-def wave_shift_pix(params: ModelParameters, ctx: ModelContext,
-                   config: ModelConfig) -> jnp.ndarray:
-    """Wavelength-solution shift (pixels) of one exposure on the observed grid,
-    ``(n_orders, n_pixels)``."""
-    t = instrument_terms(params, config)
-    drift = jnp.broadcast_to(t.wave_drift, t.wave.shape[:1])
-    return jax.vmap(_order_shift)(t.wave, drift, ctx.obs_wave_norm)
-
-
-def log_resolution(params: ModelParameters, ctx: ModelContext,
-                   config: ModelConfig) -> jnp.ndarray:
-    """ln R of one exposure on each order's model grid, ``(n_orders, order_size)``."""
-    t = instrument_terms(params, config)
-    rel = jax.vmap(lambda b, x: _order_log_r(b, t.log_r_drift, x))(t.log_r, _model_norm(ctx))
-    return jnp.log(1e5 * config.resolution_init) + rel
+    wave = bounded(params.wave_coeffs, 0.0, c * jnp.asarray(config.wave_prior_pix))
+    res = bounded(params.resolution_coeffs, resolution_loc(config),
+                  c * jnp.asarray(config.resolution_prior))
+    return wave, res
 
 
 def expand_tp_profiles(ctx: ModelContext, params: ModelParameters
@@ -314,9 +251,9 @@ def _optical_depth(ctx: ModelContext, params: ModelParameters,
     return jnp.exp(-total_tau * ctx.airmass)
 
 
-def _process_order(wave, wave_drift, log_r, order_dwave, pixel_dwave,
-                   start_idx, obs_wave_norm, m_off, obs_off, order_ref, norm_center, norm_half,
-                   *, y_trans, log_r_drift, config, lsf_kernel):
+def _process_order(wave_coeffs, res_coeffs, order_dwave, pixel_dwave,
+                    start_idx, obs_wave_norm, m_off, obs_off, order_ref,
+                    *, y_trans, x_pix, config, lsf_kernel):
     """Resample one order's slice of the model transmission onto the observed grid.
 
     LSF-convolution, wave-solution shift, and flux-conserving resample. The continuum
@@ -330,8 +267,7 @@ def _process_order(wave, wave_drift, log_r, order_dwave, pixel_dwave,
         # Fixed empirical kernel (shared across orders); the fitted R(λ) is unused.
         conv_flux = apply_custom_lsf(m_flux, lsf_kernel)
     else:
-        x_model = (m_off - norm_center) / norm_half
-        R = 1e5 * config.resolution_init * jnp.exp(_order_log_r(log_r, log_r_drift, x_model))
+        R = 1e5 * jnp.exp(jnp.polyval(res_coeffs, x_pix))
         sigma_pix = (
             m_wave_abs / (LSF_FWHM_TO_SIGMA * order_dwave) / R
             # * jnp.sqrt(1.0 / R ** 2 - 1.0 / OPACITY_GRID_R ** 2)
@@ -345,7 +281,7 @@ def _process_order(wave, wave_drift, log_r, order_dwave, pixel_dwave,
         )
 
     # Wave solution: shift the observed grid (in offset space) by the pixel polynomial.
-    obs_off_shifted = obs_off + _order_shift(wave, wave_drift, obs_wave_norm) * pixel_dwave
+    obs_off_shifted = obs_off + jnp.polyval(wave_coeffs, obs_wave_norm) * pixel_dwave
 
     # Resample onto the observed grid conserving cumulative flux.
     edges = jnp.concatenate([
@@ -389,20 +325,20 @@ def _transmission(params: ModelParameters, ctx: ModelContext,
         )
         y_trans = y_trans * stellar
 
-    terms = instrument_terms(params, config)
-    process = partial(_process_order, y_trans=y_trans, log_r_drift=terms.log_r_drift,
-                      config=config, lsf_kernel=ctx.lsf_kernel)
+    x_pix = jnp.linspace(-1.0, 1.0, config.order_size)
+    process = partial(_process_order, y_trans=y_trans, x_pix=x_pix, config=config,
+                      lsf_kernel=ctx.lsf_kernel)
+    wave_coeffs, res_coeffs = instrument_coeffs(params, config)
     return jax.vmap(process)(
-        terms.wave, jnp.broadcast_to(terms.wave_drift, terms.wave.shape[:1]), terms.log_r,
+        wave_coeffs, res_coeffs,
         ctx.order_d_wave, ctx.obs_d_wave, ctx.order_start_idx, ctx.obs_wave_norm,
         ctx.model_wave_off, ctx.obs_wave_off, ctx.order_ref_wave,
-        ctx.order_norm_center, ctx.order_norm_half,
     )
 
 
-def continuum_model(params: ModelParameters, ctx: ModelContext) -> jnp.ndarray:
-    """Per-order continuum of one exposure on the observed grid: the B-spline basis
-    times the fitted per-order weights, ``(n_orders, n_pixels)``."""
+def _continuum(params: ModelParameters, ctx: ModelContext) -> jnp.ndarray:
+    """Per-order continuum on the observed grid: the B-spline basis times the fitted
+    per-order weights, ``(n_orders, n_pixels)``."""
     return jax.vmap(lambda w: jnp.matmul(ctx.cont_bspline_matrix, w,
                                          precision=MATMUL_PRECISION))(params.continuum_coeffs)
 
@@ -412,7 +348,7 @@ def forward_model(params: ModelParameters, ctx: ModelContext,
                   config: ModelConfig) -> jnp.ndarray:
     """Full modelled flux on the observed grid: the telluric (x stellar) transmission
     times the per-order continuum."""
-    return _transmission(params, ctx, config) * continuum_model(params, ctx)
+    return _transmission(params, ctx, config) * _continuum(params, ctx)
 
 
 @partial(jax.jit, static_argnums=(2,))
@@ -427,10 +363,8 @@ def telluric_only(params: ModelParameters, ctx: ModelContext,
 def _exposure_inputs(params: ModelParameters, ctx: ModelContext,
                      config: ModelConfig, layout: Layout) -> dict:
     """The per-exposure leaves of a night, each with a leading ``(N,)`` axis, for
-    :func:`jax.lax.map` / :func:`jax.lax.scan` over exposures. The per-exposure
-    instrument drifts are centred over the night first."""
+    :func:`jax.lax.map` / :func:`jax.lax.scan` over exposures."""
     N = layout.n_exp
-    centred = centre_night_terms(params, layout)
 
     def stack(value, site_name):
         """Pass a per-exposure leaf through; broadcast a shared leaf to ``(N, …)``."""
@@ -441,10 +375,11 @@ def _exposure_inputs(params: ModelParameters, ctx: ModelContext,
         t_latent=stack(params.t_latent, "t_latent"),
         h2o_latent=stack(params.h2o_latent, "h2o_latent"),
         continuum_coeffs=stack(params.continuum_coeffs, "continuum_coeffs"),
+        wave_coeffs=stack(params.wave_coeffs, "wave_coeffs"),
+        resolution_coeffs=stack(params.resolution_coeffs, "resolution_coeffs"),
         dry={s: stack(v, f"dry_vmr_{s}") for s, v in params.dry_vmr_scalars.items()},
         airmass=ctx.airmass,
         baryrv=ctx.baryrv,
-        **{name: stack(getattr(centred, name), name) for name in NIGHT_TERMS},
     )
     if config.wind_enabled:
         mapped["wind_v_los"] = ctx.wind_v_los                  # (N, n_layers)
@@ -456,9 +391,9 @@ def _exposure_slice(params: ModelParameters, ctx: ModelContext, config: ModelCon
     """Single-exposure ``(params, ctx)`` from one slice of :func:`_exposure_inputs`."""
     params_i = params._replace(
         t_latent=ex["t_latent"], h2o_latent=ex["h2o_latent"],
-        continuum_coeffs=ex["continuum_coeffs"], dry_vmr_scalars=ex["dry"],
-        **{name: ex[name] for name in NIGHT_TERMS},
-    )  # the static instrument terms, rv_systemic and vsini stay shared
+        continuum_coeffs=ex["continuum_coeffs"], wave_coeffs=ex["wave_coeffs"],
+        resolution_coeffs=ex["resolution_coeffs"], dry_vmr_scalars=ex["dry"],
+    )  # rv_systemic / vsini stay the shared scalars closed over in ``params``
     ctx_i = ctx._replace(airmass=ex["airmass"], baryrv=ex["baryrv"])
     if config.wind_enabled:
         ctx_i = ctx_i._replace(wind_v_los=ex["wind_v_los"])

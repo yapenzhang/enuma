@@ -331,42 +331,39 @@ for full examples of fitting optical and near-infrared time-series spectra, resp
 Shared vs per-exposure parameters
 ---------------------------------
 
-Each atmospheric parameter group is either fitted separately for every exposure
-(it gets a leading ``(N,)`` axis) or shared by the whole night. The instrument has
-a static shape per order, plus small per-exposure drifts:
+Each parameter group is either fitted separately for every exposure (it gets a
+leading ``(N,)`` axis) or shared by the whole night:
 
 .. list-table::
    :header-rows: 1
    :widths: 40 60
 
    * - Parameter
-     - Varies per exposure
+     - Per exposure if
    * - temperature profile (``t_latent``)
-     - if ``temperature_per_exposure=True``
+     - ``temperature_per_exposure=True``
    * - H2O profile (``h2o_latent``)
-     - if ``h2o_per_exposure=True``
+     - ``h2o_per_exposure=True``
    * - dry-species columns (``dry_vmr_<species>``)
-     - if ``dry_vmr_per_exposure=True``
-   * - resolution R(λ) (``resolution_terms``)
-     - static per order; with ``resolution_per_exposure=True``, one ln R offset per
-       exposure, shared by all orders (``resolution_drift``)
-   * - wavelength solution (``wave_terms``)
-     - static per order; with ``wave_per_exposure=True``, one shift per exposure and
-       order (``wave_drift``)
+     - ``dry_vmr_per_exposure=True``
+   * - resolution R(λ) (``resolution_coeffs``)
+     - ``resolution_per_exposure=True``
+   * - wavelength solution (``wave_coeffs``)
+     - ``wave_per_exposure=True``
    * - continuum (``continuum_coeffs``)
      - always per exposure
    * - stellar ``rv_systemic`` and ``vsini``
      - always shared
 
-All flags default to ``True``. A sensible starting point is:
+All flags default to ``True``, which is equivalent to fitting each exposure
+independently except for the stellar parameters. A sensible starting point is:
 
 * share the **dry-species columns** (``dry_vmr_per_exposure=False``) so the
   airmass variation constrains them;
 * keep **H2O** per exposure, since water vapour varies on timescales of minutes;
-* share the **temperature profile**;
-* for a very stable spectrograph, also drop the per-exposure **resolution** and
-  **wavelength** offsets (``resolution_per_exposure=False``,
-  ``wave_per_exposure=False``).
+* share the **temperature profile**, and for a stable spectrograph also the
+  **resolution** and **wavelength solution**, to reduce the number of free
+  parameters.
 
 The barycentric velocity of each exposure is read from ``data["baryrv"]`` when
 present (the HDF5 loader reads it). Otherwise it is computed from the target

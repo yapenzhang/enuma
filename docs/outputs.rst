@@ -23,7 +23,7 @@ The fit result
      - Best-fit parameters as a :class:`~enuma.state.ModelParameters` (see below).
    * - ``sites``
      - The same values as a flat dict, e.g. ``{"t_latent": ..., "dry_vmr_co2":
-       ..., "wave_terms": ...}``. Convenient for saving with ``np.savez``.
+       ..., "wave_coeffs": ...}``. Convenient for saving with ``np.savez``.
    * - ``losses``
      - Loss (negative ELBO) at every optimiser step.
    * - ``data``, ``obs_mask``
@@ -86,25 +86,24 @@ leading ``(N,)`` axis.
      - ``{species: (1,)}``
      - log10 offset of each dry species' VMR profile from the MIPAS reference. A
        value of 0.05 means the column is 10\ :sup:`0.05` ≈ 1.12 times the reference.
-   * - ``resolution_terms``
+   * - ``resolution_coeffs``
      - ``(O, n_resolution_coeffs)``
-     - Static Legendre terms of ln(R(x) / R₀) per order, before the bound (see
-       below).
-   * - ``wave_terms``
+     - Per-order polynomial (highest degree first) for the resolving power,
+       R(x) = 10\ :sup:`5` · exp(poly(x)), with x running from −1 to 1 across the
+       order.
+   * - ``wave_coeffs``
      - ``(O, n_wave_coeffs)``
-     - Static Legendre terms of the wavelength-solution shift per order, in
-       **pixels**, before the bound.
+     - Per-order polynomial for the wavelength-solution correction, in **pixels**,
+       with x from −1 to 1 across the order.
+
+       The model uses each wavelength-shift and resolution coefficient bounded about
+       its prior mean (see :ref:`method`); the saved values are the fitted ones
+       before the bound, and :func:`~enuma.model.forward.instrument_coeffs` gives
+       the bounded ones.
    * - ``continuum_coeffs``
      - ``(O, continuum_n_nodes)``
      - Weights of the per-order cubic B-spline continuum (about 1 for normalised
-       data); per exposure, ``(N, O, continuum_n_nodes)``, in a time series.
-   * - ``wave_drift``
-     - ``(N, O)``
-     - Time series: per-exposure shift of each order in pixels (zero mean over the
-       night), before the bound. Zero for a single exposure.
-   * - ``resolution_drift``
-     - ``(N,)``
-     - Time series: per-exposure ln R offset shared by all orders, before the bound.
+       data).
    * - ``rv_systemic``
      - scalar
      - Systemic radial velocity of the star (km/s); used only with a stellar
@@ -140,32 +139,6 @@ For a time series with per-exposure profiles, select one exposure first, e.g.
 ``p = res.params._replace(t_latent=res.params.t_latent[i],
 h2o_latent=res.params.h2o_latent[i])``.
 
-Physical instrument terms
--------------------------
-
-The model uses the wavelength-solution and resolution terms through their bounds
-(see :ref:`method`); :func:`~enuma.model.forward.instrument_terms` applies them. The shift
-and ln R on the pixel or model grid come from
-:func:`~enuma.model.forward.wave_shift_pix` and
-:func:`~enuma.model.forward.log_resolution`:
-
-.. code-block:: python
-
-    from enuma.model.forward import (centre_night_terms, instrument_terms,
-                                     log_resolution, wave_shift_pix)
-
-    # Static Legendre terms per order (pixels; ln R relative to R0), and for a time
-    # series the per-exposure offsets about their night means.
-    t = instrument_terms(centre_night_terms(res.params, res.layout), res.config)
-    t.wave, t.wave_drift, t.log_r, t.log_r_drift
-
-    # One exposure (or the single one): shift (O, P) in pixels, ln R (O, order_size).
-    shift = wave_shift_pix(result.params, result.context, result.config)
-    ln_r = log_resolution(result.params, result.context, result.config)
-
-:func:`~enuma.inference.diagnostics.instrument_report` logs these per order after
-every fit and returns them as a dict.
-
 
 Saved files
 ***********
@@ -183,19 +156,11 @@ Saved files
           "params": {
             "t_latent": [...], "h2o_latent": [...],
             "dry_vmr_scalars": {"co2": [0.047], ...},
-            "resolution_terms": [[...], ...], "wave_terms": [[...], ...],
+            "resolution_coeffs": [[...], ...], "wave_coeffs": [[...], ...],
             "continuum_coeffs": [[...], ...],
-            "rv_systemic": 0.0, "vsini": 1.0, ...
-          },
-          "instrument": {
-            "shift_px": [[...], ...], "log_r": [[...], ...],
-            "resolution_r0": 100000.0, "resolution_level": [...], ...
+            "rv_systemic": 0.0, "vsini": 1.0
           }
         }
-
-    ``instrument`` repeats the wavelength-shift and resolution terms in physical
-    units (pixels; ln R relative to ``resolution_r0``), and each order's R level.
-    Loading ignores it.
 
     Load it with :func:`~enuma.io.results.load_best_fit_params_json`. To recompute the model
     in a new session, rebuild the context from the same data and ``FitConfig``:

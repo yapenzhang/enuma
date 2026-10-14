@@ -20,7 +20,7 @@ class FitConfig:
       (:func:`~enuma.inference.fit.fit_timeseries` only).
     * **Model sizes**: polynomial degrees and continuum B-spline nodes.
     * **Instrument priors**: widths and bounds of the wavelength-shift and
-      resolution terms.
+      resolution coefficients.
     * **Atmosphere**: layer grid, GP priors on the T / H2O profiles, observatory
       location, and the reference-profile source (``mipas`` / ``gdas``).
     * **Observation overrides**: ``airmass`` and ``pwv_mm`` when headers are missing
@@ -50,8 +50,7 @@ class FitConfig:
     fit_resolution: bool = True
     #: Fit the per-order wavelength-solution correction (else no shift).
     fit_wave_solution: bool = True
-    #: Fit the per-order B-spline continuum (else pinned at 1); in a time series it
-    #: is fitted per exposure.
+    #: Fit the per-order B-spline continuum (else pinned at 1).
     fit_continuum: bool = True
     #: Fit the temperature-profile deviation (else the reference T profile is used).
     fit_temperature: bool = True
@@ -70,41 +69,34 @@ class FitConfig:
     temperature_per_exposure: bool = True
     #: Fit the H2O profile per exposure, or share it; time series only.
     h2o_per_exposure: bool = True
-    #: Add a per-exposure ln R offset, shared by all orders (seeing), to the static
-    #: per-order R(λ); time series only. Else R(λ) is shared across the night.
+    #: Fit the resolution R(λ) per exposure, or share it; time series only.
     resolution_per_exposure: bool = True
-    #: Add a per-exposure wavelength offset of each order (instrument drift) to the
-    #: static per-order wavelength solution; time series only. Else the wavelength
-    #: solution is shared across the night.
+    #: Fit the wavelength solution per exposure, or share it; time series only.
     wave_per_exposure: bool = True
 
     # ---- Polynomial degrees / sizes ----
-    #: Number of Legendre terms of the static per-order ln R(λ)
+    #: Number of coefficients of the per-order log-resolution polynomial
     #: (1 = constant R, 2 = linear in λ).
     n_resolution_coeffs: int = 2
-    #: Number of Legendre terms of the static per-order wavelength shift
+    #: Number of coefficients of the per-order wavelength-shift polynomial
     #: (1 = constant shift, 2 = + linear, 3 = + quadratic).
     n_wave_coeffs: int = 3
     #: Number of cubic B-spline weights in the per-order continuum.
     continuum_n_nodes: int = 20
 
     # ---- Instrument priors ----
-    #: Prior widths (pixels) of the static wavelength-shift terms, one per Legendre
+    #: Prior widths (pixels) of the wavelength-shift polynomial coefficients, one per
     #: degree (constant, linear, quadratic, …); the last value repeats for higher
-    #: degrees. Every shift and resolution term is bounded at
+    #: degrees. Every wavelength-shift and resolution coefficient is bounded at
     #: ``instrument_bound_sigmas`` times its width.
     wave_prior_pix: Tuple[float, ...] = (0.5, 0.3, 0.3)
-    #: Prior width (pixels) of the per-exposure wavelength offset of each order.
-    wave_drift_prior_pix: float = 0.25
-    #: Prior widths of the static ln R terms, one per Legendre degree (level relative
-    #: to ``resolution``, slope, …); the last value repeats for higher degrees.
+    #: Prior widths of the log-resolution polynomial coefficients, one per degree
+    #: (constant, about ln ``resolution``; slope; …); the last value repeats.
     resolution_prior: Tuple[float, ...] = (0.05, 0.025)
-    #: Prior width of the per-exposure ln R offset shared by all orders.
-    resolution_drift_prior: float = 0.05
-    #: Bound of every wavelength-shift and resolution term, in units of its prior
-    #: width: the model uses ``B·tanh(u/B)`` of the fitted value ``u``, with
-    #: ``B = instrument_bound_sigmas·σ``, which is about ``u`` well inside the bound
-    #: and never beyond it.
+    #: Bound of every wavelength-shift and resolution coefficient, in units of its
+    #: prior width: the model uses ``μ + B·tanh((u − μ)/B)`` of the fitted value
+    #: ``u``, with ``μ`` its prior mean and ``B = instrument_bound_sigmas·σ``. That
+    #: is about ``u`` well inside the bound and never further than ``B`` from ``μ``.
     instrument_bound_sigmas: float = 4.0
 
     # ---- GP priors on the per-layer T and H2O dex deviations ----
@@ -308,8 +300,6 @@ class FitConfig:
         for name, value in (("stellar_node_kms", self.stellar_node_kms),
                             ("stellar_gp_length_kms", self.stellar_gp_length_kms),
                             ("stellar_gp_sigma", self.stellar_gp_sigma),
-                            ("wave_drift_prior_pix", self.wave_drift_prior_pix),
-                            ("resolution_drift_prior", self.resolution_drift_prior),
                             ("instrument_bound_sigmas", self.instrument_bound_sigmas)):
             if value <= 0:
                 raise ValueError(f"{name} must be positive; got {value}.")

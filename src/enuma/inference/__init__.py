@@ -6,7 +6,6 @@ high-level fit entry points.
 model (``telluric_model``) and wires everything into :func:`fit_spectrum` /
 :func:`fit_timeseries`. ``stellar_gp`` (with the banded solver ``banded``) and
 ``stellar_em`` learn the stellar spectrum from the data (:func:`fit_nights`).
-``diagnostics`` reports the fitted instrument terms (:func:`instrument_report`).
 """
 
 from enuma.inference.sites import (
@@ -20,7 +19,6 @@ from enuma.inference.sites import (
     resolve_fit_species,
 )
 from enuma.inference.optimizer import run_svi
-from enuma.inference.diagnostics import instrument_report
 from enuma.inference.fit import FitResult, fit_spectrum, fit_timeseries, telluric_model
 from enuma.inference.stellar_gp import StellarTemplate
 from enuma.inference.stellar_em import MultiNightResult, fit_nights
@@ -42,5 +40,4 @@ __all__ = [
     "fit_nights",
     "MultiNightResult",
     "StellarTemplate",
-    "instrument_report",
 ]

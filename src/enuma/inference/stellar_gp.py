@@ -51,7 +51,7 @@ from enuma.model.forward import (
     _exposure_slice,
     forward_model,
     forward_model_batched,
-    wave_shift_pix,
+    instrument_coeffs,
 )
 from enuma.model.stellar import apply_stellar, fetch_phoenix_spectrum, normalize_template
 from enuma.state import Layout, ModelConfig, ModelContext, ModelParameters
@@ -459,7 +459,9 @@ def _window_start(params_n: ModelParameters, ctx_n: ModelContext, config: ModelC
                   geom: NightGeometry, spec: ProbeSpec) -> jnp.ndarray:
     """``(O, P)`` first node of each pixel's probe window: the node nearest the
     pixel's rest-frame centre minus half the colors."""
-    shift = wave_shift_pix(params_n, ctx_n, config) * ctx_n.obs_d_wave
+    wave_coeffs, _ = instrument_coeffs(params_n, config)
+    shift = jax.vmap(lambda c, x, dw: jnp.polyval(c, x) * dw)(
+        wave_coeffs, ctx_n.obs_wave_norm, ctx_n.obs_d_wave)
     lam_off = ctx_n.obs_wave_off + shift + geom.ref_minus_node0[:, None]
     x = (jnp.log1p(lam_off / geom.lam_node0[:, None])
          - jnp.log1p((params_n.rv_systemic + ctx_n.baryrv) / C_KMS))

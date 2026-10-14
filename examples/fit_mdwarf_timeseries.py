@@ -20,8 +20,8 @@ def main():
         max_steps=1000,
         fit_temperature=True,   # per-exposure T profile
         fit_continuum=True,     # per-exposure blaze/throughput
-        fit_resolution=True,    # static per order, ln R offset per exposure (seeing)
-        fit_wave_solution=True, # static per order, shift per exposure and order
+        fit_resolution=True,    # shared LSF across the night
+        fit_wave_solution=True,
         resolution=1.2, # x 1e5
         dry_vmr_per_exposure=False,   # else shared
         temperature_per_exposure=False,
@@ -37,8 +37,7 @@ def main():
         # stellar_mstep_steps=300,
     )
 
-    # joint multi-exposure fit (shared dry VMRs and T; per-exposure H2O/continuum; static
-    # instrument with per-exposure drifts)
+    # joint multi-exposure fit (shared dry VMRs/LSF/wave; per-exposure T/H2O/continuum)
     res = fit_timeseries(data, fc)
 
     out = pathlib.Path("mdwarf_fit_out")

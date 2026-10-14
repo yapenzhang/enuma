@@ -54,8 +54,8 @@ def main() -> int:
         species=SPECIES, fit_species=SPECIES,
         fit_temperature=True,   # per-exposure T profile
         fit_continuum=True,     # per-exposure blaze/throughput
-        fit_resolution=True,    # static per order, ln R offset per exposure (seeing)
-        fit_wave_solution=True, # static per order, shift per exposure and order
+        fit_resolution=True,    # shared LSF across the night
+        fit_wave_solution=True,                   # shared wave solution
         dry_vmr_per_exposure=False,        # else shared (airmass lever)
         temperature_per_exposure=False,
         max_steps=MAX_STEPS,
@@ -71,8 +71,7 @@ def main() -> int:
             stellar_logg=STELLAR_LOGG, vsini=VSINI,
             fit_rv=False, fit_vsini=False, stellar_rot_half_width=401)
 
-    # --- joint multi-exposure fit (shared dry VMRs and T; per-exposure H2O/continuum;
-    #     static instrument with per-exposure drifts) ---
+    # --- joint multi-exposure fit (shared dry VMRs/LSF/wave; per-exposure T/H2O/continuum) ---
     res = fit_timeseries(data, fc)
 
     # --- save best-fit sites + model/telluric cubes + diagnostic ---
