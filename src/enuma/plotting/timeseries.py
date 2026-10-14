@@ -18,7 +18,6 @@ import numpy as np
 from enuma.model.forward import (
     expand_tp_profiles,
     forward_model_batched,
-    instrument_coeffs,
 )
 from enuma.plotting.spectrum import (
     plot_instrument_diagnostics,
@@ -316,8 +315,7 @@ def plot_timeseries_parameters(result, output_path: str = "timeseries_parameters
 
     vsini = float(np.asarray(jax.device_get(p.vsini)))
     rv_sys = float(np.asarray(jax.device_get(result.sites["rv_systemic"])).reshape(-1)[0])
-    _, res_coeffs = instrument_coeffs(p, result.config)
-    mean_R = 1e5 * float(np.exp(np.mean(np.asarray(res_coeffs)[..., -1])))
+    mean_R = 1e5 * float(np.exp(np.mean(np.asarray(jax.device_get(p.resolution_coeffs))[..., -1])))
     fig.suptitle(f"Time-series parameters — shared: vsini={vsini:.2f} km/s, "
                  f"systemic RV={rv_sys:.2f} km/s, mean R≈{mean_R:,.0f}", fontsize=12)
     fig.savefig(output_path)

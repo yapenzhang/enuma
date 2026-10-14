@@ -103,8 +103,9 @@ Line-spread function
 
 The high-resolution spectrum of each order is convolved with the instrument
 line-spread function (LSF). Its width follows from a resolving power that may vary
-across the order, ``R(x) = 10^5 · exp(poly(x))`` with ``x`` from −1 to 1 across the
-order and ``n_resolution_coeffs`` coefficients (1 gives a constant R; the
+across the order, ``R(x) = 10^5 · exp(leg(x))``, with ``leg(x)`` a Legendre series
+(see `Instrument polynomials`_) in ``x`` from −1 to 1 across the order and
+``n_resolution_coeffs`` coefficients (1 gives a constant R; the
 default, 2, lets R vary linearly across the order). 
 Three LSF shapes are available through ``lsf_profile``:
 
@@ -136,29 +137,29 @@ Three LSF shapes are available through ``lsf_profile``:
 Wavelength solution and resampling
 ----------------------------------
 
-The fit can optionally correct the wavelength solution of each order with a polynomial shift
-in pixels, ``poly(x)`` with ``n_wave_coeffs`` coefficients (3rd-order polynomial by default). 
+The fit can optionally correct the wavelength solution of each order with a shift in
+pixels, a Legendre series ``leg(x)`` with ``n_wave_coeffs`` coefficients (3 by default,
+up to quadratic).
 The convolved model is then resampled to the wavelengths of the observed spectrum.
 
-Bounds on the instrument coefficients
--------------------------------------
+Instrument polynomials
+----------------------
 
-Every wavelength-shift and log-resolution coefficient has a Normal prior of width
-``σ`` about its mean ``μ`` (0, or ``ln(resolution)`` for the constant ln R term). The
-model uses the fitted value ``u`` through a bound:
+The log resolution and the wavelength shift are Legendre series in ``x``:
 
 .. code-block:: text
 
-    c = μ + B · tanh((u − μ) / B),    B = instrument_bound_sigmas · σ  (4σ)
+    leg(x) = Σ_k c_k P_k(x),    P_0 = 1,  P_1 = x,  P_2 = (3x² − 1) / 2,  …
 
-* Well inside the bound, ``c ≈ u``: the optimiser moves the coefficients in their
-  physical units.
-* ``c`` never moves further than ``B`` from ``μ``. Orders with few telluric lines
-  take their instrument largely from the stellar lines, where an imperfect stellar
-  template could otherwise drive R or the shift to unphysical values.
+The Legendre polynomials are orthogonal on [−1, 1], so ``c_0`` is the shift (or
+ln R) averaged over ``x``, and the higher terms change its shape about that mean. Up
+to degree 1 the series is the plain polynomial ``c_0 + c_1 x``. The coefficients are
+stored highest degree first, as for ``numpy.polyval``, and
+:func:`~enuma.model.forward.legendre_polyval` evaluates them.
 
-The widths are given per degree, from the constant term up; the last value repeats
-for higher degrees:
+Each coefficient has a Normal prior about 0 (``ln(resolution)`` for the constant
+ln R term). The widths are given per degree, from the constant term up; the last
+value repeats for higher degrees:
 
 .. list-table::
    :header-rows: 1
@@ -173,10 +174,6 @@ for higher degrees:
    * - ln R
      - 0.05, 0.025
      - ``resolution_prior``
-
-With the defaults the constant ln R term stays within ``exp(±0.2) ≈ 0.82–1.22`` of
-``resolution``, so set ``resolution`` close to the instrument's resolving power. A
-very large ``instrument_bound_sigmas`` recovers the unbounded coefficients.
 
 Continuum
 ---------

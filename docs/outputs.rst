@@ -88,18 +88,16 @@ leading ``(N,)`` axis.
        value of 0.05 means the column is 10\ :sup:`0.05` ≈ 1.12 times the reference.
    * - ``resolution_coeffs``
      - ``(O, n_resolution_coeffs)``
-     - Per-order polynomial (highest degree first) for the resolving power,
-       R(x) = 10\ :sup:`5` · exp(poly(x)), with x running from −1 to 1 across the
+     - Per-order Legendre series (highest degree first) for the resolving power,
+       R(x) = 10\ :sup:`5` · exp(leg(x)), with x running from −1 to 1 across the
        order.
    * - ``wave_coeffs``
      - ``(O, n_wave_coeffs)``
-     - Per-order polynomial for the wavelength-solution correction, in **pixels**,
-       with x from −1 to 1 across the order.
+     - Per-order Legendre series (highest degree first) for the wavelength-solution
+       correction, in **pixels**, with x from −1 to 1 across the order.
 
-       The model uses each wavelength-shift and resolution coefficient bounded about
-       its prior mean (see :ref:`method`); the saved values are the fitted ones
-       before the bound, and :func:`~enuma.model.forward.instrument_coeffs` gives
-       the bounded ones.
+       :func:`~enuma.model.forward.legendre_polyval` evaluates either series (see
+       :ref:`method`).
    * - ``continuum_coeffs``
      - ``(O, continuum_n_nodes)``
      - Weights of the per-order cubic B-spline continuum (about 1 for normalised

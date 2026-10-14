@@ -166,17 +166,15 @@ class ModelConfig(NamedTuple):
     # Constant-sigma chunks the variable-sigma LSF splits each order into.
     lsf_n_chunks: int = 20
     order_size: int = 20000          # per-order extent in model-grid samples
-    # Polynomial coefficient counts (degree+1) for R(λ) and the wave shift,
-    # evaluated on an intra-order coordinate in [-1, 1]; each order independent.
+    # Polynomial coefficient counts (degree+1) for R(λ) and the wave shift, Legendre
+    # series on an intra-order coordinate in [-1, 1]; each order independent.
     n_resolution_coeffs: int = 2
     resolution_init: float = 0.6     # prior mean of the constant R term (×1e5)
     n_wave_coeffs: int = 3
     # Prior widths of the wave-shift and log-resolution coefficients, one per
-    # coefficient in polynomial order (highest degree first, as ``wave_coeffs``), and
-    # the bound in units of those widths (see ``forward.instrument_coeffs``).
+    # coefficient in polynomial order (highest degree first, as ``wave_coeffs``).
     wave_prior_pix: Tuple[float, ...] = (0.3, 0.3, 0.5)
     resolution_prior: Tuple[float, ...] = (0.025, 0.05)
-    instrument_bound_sigmas: float = 4.0
     lsf_profile: str = "gaussian"    # "gaussian" or "voigt"
     lsf_voigt_gamma_ratio: float = 0.01
     # Stellar template multiplication (static, so it gates the forward-model

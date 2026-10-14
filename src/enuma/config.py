@@ -19,8 +19,8 @@ class FitConfig:
       group is fitted per exposure or shared across a night
       (:func:`~enuma.inference.fit.fit_timeseries` only).
     * **Model sizes**: polynomial degrees and continuum B-spline nodes.
-    * **Instrument priors**: widths and bounds of the wavelength-shift and
-      resolution coefficients.
+    * **Instrument priors**: widths of the wavelength-shift and resolution
+      coefficients.
     * **Atmosphere**: layer grid, GP priors on the T / H2O profiles, observatory
       location, and the reference-profile source (``mipas`` / ``gdas``).
     * **Observation overrides**: ``airmass`` and ``pwv_mm`` when headers are missing
@@ -75,29 +75,23 @@ class FitConfig:
     wave_per_exposure: bool = True
 
     # ---- Polynomial degrees / sizes ----
-    #: Number of coefficients of the per-order log-resolution polynomial
-    #: (1 = constant R, 2 = linear in λ).
+    #: Number of coefficients of the per-order log-resolution polynomial, a
+    #: Legendre series (1 = constant R, 2 = linear in λ).
     n_resolution_coeffs: int = 2
-    #: Number of coefficients of the per-order wavelength-shift polynomial
-    #: (1 = constant shift, 2 = + linear, 3 = + quadratic).
+    #: Number of coefficients of the per-order wavelength-shift polynomial, a
+    #: Legendre series (1 = constant shift, 2 = + linear, 3 = + quadratic).
     n_wave_coeffs: int = 3
     #: Number of cubic B-spline weights in the per-order continuum.
     continuum_n_nodes: int = 20
 
     # ---- Instrument priors ----
-    #: Prior widths (pixels) of the wavelength-shift polynomial coefficients, one per
+    #: Prior widths (pixels) of the wavelength-shift Legendre coefficients, one per
     #: degree (constant, linear, quadratic, …); the last value repeats for higher
-    #: degrees. Every wavelength-shift and resolution coefficient is bounded at
-    #: ``instrument_bound_sigmas`` times its width.
+    #: degrees.
     wave_prior_pix: Tuple[float, ...] = (0.5, 0.3, 0.3)
-    #: Prior widths of the log-resolution polynomial coefficients, one per degree
+    #: Prior widths of the log-resolution Legendre coefficients, one per degree
     #: (constant, about ln ``resolution``; slope; …); the last value repeats.
     resolution_prior: Tuple[float, ...] = (0.05, 0.025)
-    #: Bound of every wavelength-shift and resolution coefficient, in units of its
-    #: prior width: the model uses ``μ + B·tanh((u − μ)/B)`` of the fitted value
-    #: ``u``, with ``μ`` its prior mean and ``B = instrument_bound_sigmas·σ``. That
-    #: is about ``u`` well inside the bound and never further than ``B`` from ``μ``.
-    instrument_bound_sigmas: float = 4.0
 
     # ---- GP priors on the per-layer T and H2O dex deviations ----
     #: GP kernel for the temperature deviation, one of ``"matern52"``,
@@ -299,8 +293,7 @@ class FitConfig:
             _set(self, "stellar_reference", self.stellar_reference.lower())
         for name, value in (("stellar_node_kms", self.stellar_node_kms),
                             ("stellar_gp_length_kms", self.stellar_gp_length_kms),
-                            ("stellar_gp_sigma", self.stellar_gp_sigma),
-                            ("instrument_bound_sigmas", self.instrument_bound_sigmas)):
+                            ("stellar_gp_sigma", self.stellar_gp_sigma)):
             if value <= 0:
                 raise ValueError(f"{name} must be positive; got {value}.")
         for name in ("wave_prior_pix", "resolution_prior"):

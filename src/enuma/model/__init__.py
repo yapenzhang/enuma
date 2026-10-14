@@ -14,7 +14,7 @@ from enuma.model.forward import (
     forward_model,
     forward_model_batched,
     get_layer_properties,
-    instrument_coeffs,
+    legendre_polyval,
     telluric_only,
 )
 from enuma.model.opacity import OpacityGridInfo, get_opacities, load_pyrox_opacity
@@ -45,7 +45,7 @@ __all__ = [
     "forward_model_batched",
     "get_layer_properties",
     "telluric_only",
-    "instrument_coeffs",
+    "legendre_polyval",
     "LSF_PROFILE_CHOICES",
     "apply_custom_lsf",
     "apply_variable_lsf",

@@ -3,7 +3,6 @@ from typing import Dict, Tuple
 
 import jax
 import jax.numpy as jnp
-import numpy as np
 
 from enuma.constants import (G_EARTH, LSF_FWHM_TO_SIGMA, MATMUL_PRECISION, MMW_DRY_AIR,
                              MMW_H2O)
@@ -16,9 +15,7 @@ __all__ = [
     "OPACITY_GRID_R",
     "apply_variable_lsf",
     "apply_custom_lsf",
-    "bounded",
-    "resolution_loc",
-    "instrument_coeffs",
+    "legendre_polyval",
     "expand_tp_profiles",
     "net_stellar_rv",
     "get_layer_properties",
@@ -119,32 +116,25 @@ def apply_custom_lsf(model_flux: jnp.ndarray, kernel: jnp.ndarray) -> jnp.ndarra
 
 
 # ---------------------------------------------------------------------------
-# Instrument coefficients: every wavelength-shift and log-resolution coefficient
-# enters the model bounded about its prior mean (``bounded``).
+# Instrument polynomials: the wavelength shift and ln R are Legendre series on an
+# intra-order coordinate in [-1, 1].
 # ---------------------------------------------------------------------------
 
-def bounded(u: jnp.ndarray, loc, bound) -> jnp.ndarray:
-    """``loc + bound · tanh((u − loc) / bound)``: about ``u`` well inside the bound,
-    never further than ``bound`` from ``loc``."""
-    return loc + bound * jnp.tanh((u - loc) / bound)
+def legendre_polyval(coeffs, x):
+    """``Σ_k c_k P_k(x)`` over the Legendre polynomials ``P_k``, with ``coeffs``
+    ordered as for ``jnp.polyval``: highest degree first, constant last.
 
-
-def resolution_loc(config: ModelConfig) -> jnp.ndarray:
-    """Prior mean of the log-resolution coefficients: ``log(resolution_init)`` for
-    the constant term, 0 for the λ-dependent terms."""
-    return jnp.zeros(config.n_resolution_coeffs).at[-1].set(float(np.log(config.resolution_init)))
-
-
-def instrument_coeffs(params: ModelParameters,
-                      config: ModelConfig) -> Tuple[jnp.ndarray, jnp.ndarray]:
-    """The wavelength-shift (pixels) and log-resolution coefficients the model uses:
-    each fitted coefficient bounded at ``instrument_bound_sigmas`` times its prior
-    width about its prior mean."""
-    c = config.instrument_bound_sigmas
-    wave = bounded(params.wave_coeffs, 0.0, c * jnp.asarray(config.wave_prior_pix))
-    res = bounded(params.resolution_coeffs, resolution_loc(config),
-                  c * jnp.asarray(config.resolution_prior))
-    return wave, res
+    Elementwise arithmetic only, so it takes NumPy or JAX arrays and traces under
+    ``jit`` (the number of coefficients is static).
+    """
+    c = coeffs[::-1]                                        # constant first
+    p_prev, p = 1.0, x                                      # P_0, P_1
+    out = c[0] + 0.0 * x
+    for k in range(1, len(c)):
+        if k > 1:                                           # Bonnet's recursion
+            p_prev, p = p, ((2 * k - 1) * x * p - (k - 1) * p_prev) / k
+        out = out + c[k] * p
+    return out
 
 
 def expand_tp_profiles(ctx: ModelContext, params: ModelParameters
@@ -267,7 +257,7 @@ def _process_order(wave_coeffs, res_coeffs, order_dwave, pixel_dwave,
         # Fixed empirical kernel (shared across orders); the fitted R(λ) is unused.
         conv_flux = apply_custom_lsf(m_flux, lsf_kernel)
     else:
-        R = 1e5 * jnp.exp(jnp.polyval(res_coeffs, x_pix))
+        R = 1e5 * jnp.exp(legendre_polyval(res_coeffs, x_pix))
         sigma_pix = (
             m_wave_abs / (LSF_FWHM_TO_SIGMA * order_dwave) / R
             # * jnp.sqrt(1.0 / R ** 2 - 1.0 / OPACITY_GRID_R ** 2)
@@ -281,7 +271,7 @@ def _process_order(wave_coeffs, res_coeffs, order_dwave, pixel_dwave,
         )
 
     # Wave solution: shift the observed grid (in offset space) by the pixel polynomial.
-    obs_off_shifted = obs_off + jnp.polyval(wave_coeffs, obs_wave_norm) * pixel_dwave
+    obs_off_shifted = obs_off + legendre_polyval(wave_coeffs, obs_wave_norm) * pixel_dwave
 
     # Resample onto the observed grid conserving cumulative flux.
     edges = jnp.concatenate([
@@ -328,9 +318,8 @@ def _transmission(params: ModelParameters, ctx: ModelContext,
     x_pix = jnp.linspace(-1.0, 1.0, config.order_size)
     process = partial(_process_order, y_trans=y_trans, x_pix=x_pix, config=config,
                       lsf_kernel=ctx.lsf_kernel)
-    wave_coeffs, res_coeffs = instrument_coeffs(params, config)
     return jax.vmap(process)(
-        wave_coeffs, res_coeffs,
+        params.wave_coeffs, params.resolution_coeffs,
         ctx.order_d_wave, ctx.obs_d_wave, ctx.order_start_idx, ctx.obs_wave_norm,
         ctx.model_wave_off, ctx.obs_wave_off, ctx.order_ref_wave,
     )

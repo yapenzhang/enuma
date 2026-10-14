@@ -22,7 +22,7 @@ from scipy.ndimage import gaussian_filter
 from enuma.model.forward import (
     expand_tp_profiles,
     forward_model,
-    instrument_coeffs,
+    legendre_polyval,
     telluric_only,
 )
 from enuma.state import ModelConfig, ModelContext, ModelParameters
@@ -362,19 +362,17 @@ def plot_instrument_diagnostics(
     model_wave_np = jax.device_get(context.model_wave)
     obs_wave_np = jax.device_get(context.obs_wave)
     order_start_idx = jax.device_get(context.order_start_idx)
-    # The coefficients as the model uses them (bounded about their prior means).
-    wave_coeffs, res_coeffs = (np.asarray(a) for a in instrument_coeffs(optimized_params, config))
 
     for i in range(n_orders):
         # Wavelength shift: w_coeffs are already in pixel units (see
         # model.process_order), so the polynomial on obs_wave_norm is the shift.
         obs_wn = jax.device_get(context.obs_wave_norm[i])
-        w_coeffs = wave_coeffs[i]
-        pixel_shift = np.polyval(w_coeffs, obs_wn)
+        w_coeffs = jax.device_get(optimized_params.wave_coeffs[i])
+        pixel_shift = legendre_polyval(w_coeffs, obs_wn)
 
         # Spectral resolution R, mapped from the model grid onto observed pixels.
-        r_coeffs = res_coeffs[i]
-        R_model = 1e5 * np.exp(np.polyval(r_coeffs, x_pix_model))   # log-space R(λ)
+        r_coeffs = jax.device_get(optimized_params.resolution_coeffs[i])
+        R_model = 1e5 * np.exp(legendre_polyval(r_coeffs, x_pix_model))   # log-space R(λ)
         start_idx = int(order_start_idx[i])
         m_wave = model_wave_np[start_idx: start_idx + config.order_size]
         R_obs = np.interp(obs_wave_np[i], m_wave, R_model)

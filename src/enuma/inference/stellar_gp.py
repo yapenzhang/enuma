@@ -51,7 +51,7 @@ from enuma.model.forward import (
     _exposure_slice,
     forward_model,
     forward_model_batched,
-    instrument_coeffs,
+    legendre_polyval,
 )
 from enuma.model.stellar import apply_stellar, fetch_phoenix_spectrum, normalize_template
 from enuma.state import Layout, ModelConfig, ModelContext, ModelParameters
@@ -455,13 +455,12 @@ def _band_to_blocks(band: jnp.ndarray):
 # Normal equations: A_n read off the forward model with colored JVPs
 # ---------------------------------------------------------------------------
 
-def _window_start(params_n: ModelParameters, ctx_n: ModelContext, config: ModelConfig,
-                  geom: NightGeometry, spec: ProbeSpec) -> jnp.ndarray:
+def _window_start(params_n: ModelParameters, ctx_n: ModelContext, geom: NightGeometry,
+                  spec: ProbeSpec) -> jnp.ndarray:
     """``(O, P)`` first node of each pixel's probe window: the node nearest the
     pixel's rest-frame centre minus half the colors."""
-    wave_coeffs, _ = instrument_coeffs(params_n, config)
-    shift = jax.vmap(lambda c, x, dw: jnp.polyval(c, x) * dw)(
-        wave_coeffs, ctx_n.obs_wave_norm, ctx_n.obs_d_wave)
+    shift = jax.vmap(lambda c, x, dw: legendre_polyval(c, x) * dw)(
+        params_n.wave_coeffs, ctx_n.obs_wave_norm, ctx_n.obs_d_wave)
     lam_off = ctx_n.obs_wave_off + shift + geom.ref_minus_node0[:, None]
     x = (jnp.log1p(lam_off / geom.lam_node0[:, None])
          - jnp.log1p((params_n.rv_systemic + ctx_n.baryrv) / C_KMS))
@@ -525,7 +524,7 @@ def normal_equations(params: ModelParameters, ctx: ModelContext, config: ModelCo
         r0 = jnp.where(w > 0, ex["obs"] - m0, 0.0)
         chi2 = chi2 + jnp.sum(w * r0 * r0)
 
-        s = _window_start(params_n, ctx_n, config, geom, spec)      # (O, P)
+        s = _window_start(params_n, ctx_n, geom, spec)              # (O, P)
         R = jnp.take_along_axis(Y, (s[None] + u[:, None, None]) % Pc, axis=0)
         R = jnp.moveaxis(R, 0, -1)                                  # (O, P, Pc): A[o, p, s + u]
 
