@@ -93,18 +93,14 @@ _WAVE = _zero_mean_site(
 _WAVE_DRIFT = _zero_mean_site(
     "wave_drift", lambda c, cfg: (_n_orders(c),), lambda cfg: cfg.wave_drift_prior_pix,
     is_free=lambda f: f.fit_wave_solution and f.wave_per_exposure, night_only=True)
-# Continuum: a static per-order B-spline shape, times a per-exposure scale of each
-# order in a night.
 _CONTINUUM = Param(
     "continuum_coeffs",
-    init=lambda c, cfg, L: jnp.ones((_n_orders(c), c.cont_bspline_matrix.shape[1])),
+    init=lambda c, cfg, L: jnp.ones(
+        L.lead("continuum_coeffs") + (_n_orders(c), c.cont_bspline_matrix.shape[1])),
     prior=lambda c, cfg, L: dist.Normal(1.0, 0.1).expand(
-        [_n_orders(c), c.cont_bspline_matrix.shape[1]]),
+        list(L.lead("continuum_coeffs") + (_n_orders(c), c.cont_bspline_matrix.shape[1]))),
     is_free=lambda f: f.fit_continuum,
 )
-_CONTINUUM_SCALE = _zero_mean_site(
-    "continuum_log_scale", lambda c, cfg: (_n_orders(c),), lambda cfg: cfg.continuum_scale_prior,
-    is_free=lambda f: f.fit_continuum, night_only=True)
 
 # Stellar Doppler shift + rotation. Free only when the stellar template is on
 # (``stellar_enabled``); the init/prior mean come from the config (the systemic-RV
@@ -152,21 +148,21 @@ def dry_species_of(context: ModelContext,
 def iter_sites(dry_species: Tuple[str, ...]) -> Tuple[Param, ...]:
     """The full ordered site spec, with the dry-column family spliced in."""
     return (_T_LATENT, _H2O_LATENT, *(_dry_site(s) for s in dry_species),
-            _RESOLUTION, _RESOLUTION_DRIFT, _WAVE, _WAVE_DRIFT, _CONTINUUM, _CONTINUUM_SCALE,
+            _RESOLUTION, _RESOLUTION_DRIFT, _WAVE, _WAVE_DRIFT, _CONTINUUM,
             _RV_SYSTEMIC, _VSINI)
 
 
 def per_exposure_sites(fit_config: FitConfig, dry_species: Tuple[str, ...]) -> frozenset:
     """Site names that carry a leading per-exposure ``(N,)`` axis in a night fit.
 
-    The continuum scales are always per exposure. The temperature/H2O profiles and
-    the dry-species columns are per exposure or shared per the ``FitConfig`` knobs
+    The continuum is always per exposure. The temperature/H2O profiles and the
+    dry-species columns are per exposure or shared per the ``FitConfig`` knobs
     (``temperature_per_exposure`` / ``h2o_per_exposure`` / ``dry_vmr_per_exposure``).
     The wavelength solution and R(λ) are static per order, plus per-exposure drifts
     with ``wave_per_exposure`` / ``resolution_per_exposure``. A single-exposure fit
     never calls this — it uses the default empty ``Layout``.
     """
-    names = {"continuum_log_scale"}
+    names = {"continuum_coeffs"}
     if fit_config.temperature_per_exposure:
         names.add("t_latent")
     if fit_config.h2o_per_exposure:

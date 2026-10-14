@@ -332,8 +332,8 @@ Shared vs per-exposure parameters
 ---------------------------------
 
 Each atmospheric parameter group is either fitted separately for every exposure
-(it gets a leading ``(N,)`` axis) or shared by the whole night. The instrument and
-the continuum have a static shape per order, plus small per-exposure terms:
+(it gets a leading ``(N,)`` axis) or shared by the whole night. The instrument has
+a static shape per order, plus small per-exposure drifts:
 
 .. list-table::
    :header-rows: 1
@@ -354,8 +354,7 @@ the continuum have a static shape per order, plus small per-exposure terms:
      - static per order; with ``wave_per_exposure=True``, one shift per exposure and
        order (``wave_drift``)
    * - continuum (``continuum_coeffs``)
-     - static shape per order, with one scale per exposure and order
-       (``continuum_log_scale``)
+     - always per exposure
    * - stellar ``rv_systemic`` and ``vsini``
      - always shared
 

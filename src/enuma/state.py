@@ -51,17 +51,16 @@ class ModelParameters(NamedTuple):
     dry_vmr_scalars: Dict[str, jnp.ndarray]  # per-species scalar log10 offsets
     wave_terms: jnp.ndarray                  # (n_orders, n_wave_coeffs) static shift, Legendre, pixels
     resolution_terms: jnp.ndarray            # (n_orders, n_resolution_coeffs) static ln(R/R₀), Legendre
-    continuum_coeffs: jnp.ndarray            # (n_orders, n_cont_nodes) static continuum shape
+    continuum_coeffs: jnp.ndarray            # (n_orders, n_cont_nodes)
     # Only used when ``ModelConfig.stellar_enabled``; otherwise pinned constants
     # the forward model ignores.
     rv_systemic: jnp.ndarray = np.array(0.0, np.float32)  # scalar, km/s
     vsini: jnp.ndarray = np.array(1.0, np.float32)        # scalar, km/s
-    # Per-exposure terms of a night, centred over the night: the wavelength offset of
-    # each order (N, n_orders), the ln R offset shared by all orders (N,), and the ln
-    # continuum scale of each order (N, n_orders). Zero for a single exposure.
+    # Per-exposure instrument drifts of a night, centred over the night: the
+    # wavelength offset of each order (N, n_orders) and the ln R offset shared by all
+    # orders (N,). Zero for a single exposure.
     wave_drift: jnp.ndarray = np.array(0.0, np.float32)
     resolution_drift: jnp.ndarray = np.array(0.0, np.float32)
-    continuum_log_scale: jnp.ndarray = np.array(0.0, np.float32)
 
 
 # The structured leaf that fans out to per-species flat sites, and the flat-key
@@ -187,12 +186,11 @@ class ModelConfig(NamedTuple):
     resolution_init: float = 0.6     # R₀ (×1e5), the centre of the R prior
     n_wave_coeffs: int = 3
     # Prior widths of the instrument terms (one per Legendre degree for the static
-    # terms), the continuum-scale width, and the bound in units of those widths.
+    # terms) and the bound in units of those widths.
     wave_prior_pix: Tuple[float, ...] = (0.5, 0.3, 0.3)
     wave_drift_prior_pix: float = 0.25
     resolution_prior: Tuple[float, ...] = (0.2, 0.075)
     resolution_drift_prior: float = 0.05
-    continuum_scale_prior: float = 0.1
     instrument_bound_sigmas: float = 4.0
     lsf_profile: str = "gaussian"    # "gaussian" or "voigt"
     lsf_voigt_gamma_ratio: float = 0.01

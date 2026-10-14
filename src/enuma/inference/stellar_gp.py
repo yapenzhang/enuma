@@ -49,7 +49,6 @@ from enuma.inference.banded import (
 from enuma.model.forward import (
     _exposure_inputs,
     _exposure_slice,
-    centre_night_terms,
     forward_model,
     forward_model_batched,
     wave_shift_pix,
@@ -556,54 +555,25 @@ def normal_equations(params: ModelParameters, ctx: ModelContext, config: ModelCo
     return band, b, chi2, overflow
 
 
-@partial(jax.jit, static_argnames=("config", "layout", "n_iter"))
+@partial(jax.jit, static_argnames=("config", "layout"))
 def refit_continuum(params: ModelParameters, ctx: ModelContext, config: ModelConfig,
                     layout: Layout, obs_flux: jnp.ndarray, obs_w: jnp.ndarray,
-                    prior_sigma: float = 0.1, n_iter: int = 2):
-    """MAP continuum (static shape and per-exposure scales) with everything else fixed.
+                    prior_sigma: float = 0.1) -> jnp.ndarray:
+    """MAP per-exposure continuum weights with everything else fixed.
 
-    The model is ``s_{n,o} · (B·w_o) · g`` with ``g`` the model at unit continuum. Given
-    the scales, each order's shape ``w_o`` is a small linear least-squares problem
-    over all exposures, with the fit's ``N(1, prior_sigma)`` prior on ``w``. Given the
-    shape, each scale has a closed form; the scales are then re-centred (zero mean
-    ln s per order), their mean moving into ``w``. The two solves alternate
-    ``n_iter`` times. Run before each star step, this hands smooth mismatch to the
-    continuum instead of the template.
-
-    Returns:
-        ``(continuum_coeffs (O, n_weights), continuum_log_scale)``; the log scales
-        are returned unchanged when they are not fitted per exposure.
+    The model is ``c · g`` with ``g`` the model at unit continuum and ``c = B·w``
+    linear in the B-spline weights ``w``, so each exposure and order is a small
+    linear least-squares problem, with the fit's ``N(1, prior_sigma)`` prior on
+    ``w``. Run before each star step, it hands smooth mismatch to the continuum
+    instead of the template. Returns ``(N, O, n_weights)``.
     """
-    unit = params._replace(continuum_coeffs=jnp.ones_like(params.continuum_coeffs),
-                           continuum_log_scale=jnp.zeros_like(params.continuum_log_scale))
-    g = forward_model_batched(unit, ctx, config, layout)             # (N, O, P)
+    ones = jnp.ones_like(params.continuum_coeffs)
+    g = forward_model_batched(params._replace(continuum_coeffs=ones), ctx, config, layout)
     Bm = ctx.cont_bspline_matrix                                     # (P, k)
     lam = 1.0 / prior_sigma ** 2
-    wg2, wgf = obs_w * g * g, obs_w * g * obs_flux
-    fit_scale = "continuum_log_scale" in layout.per_exposure
-    O = g.shape[1]
-    ls0 = (centre_night_terms(params, layout).continuum_log_scale if fit_scale
-           else jnp.zeros((g.shape[0], O), g.dtype))
-
-    def step(_, carry):
-        w, ls = carry
-        s = jnp.exp(jnp.broadcast_to(ls, (g.shape[0], O)))           # (N, O)
-        M = (jnp.einsum("pk,no,nop,pl->okl", Bm, s * s, wg2, Bm)
-             + lam * jnp.eye(Bm.shape[1]))
-        rhs = jnp.einsum("pk,no,nop->ok", Bm, s, wgf) + lam
-        w = jnp.linalg.solve(M, rhs[..., None])[..., 0]              # (O, k)
-        if not fit_scale:
-            return w, ls
-        c = jnp.einsum("pk,ok->op", Bm, w)                           # (O, P)
-        den = jnp.einsum("nop,op->no", wg2, c * c)
-        num = jnp.einsum("nop,op->no", wgf, c)
-        ok = (den > 0) & (num > 0)
-        log_s = jnp.where(ok, jnp.log(jnp.where(ok, num / jnp.where(ok, den, 1.0), 1.0)), 0.0)
-        mean = jnp.mean(log_s, axis=0)                               # (O,)
-        return w * jnp.exp(mean)[:, None], log_s - mean
-
-    w, ls = jax.lax.fori_loop(0, n_iter, step, (params.continuum_coeffs, ls0))
-    return w, (ls if fit_scale else params.continuum_log_scale)
+    M = jnp.einsum("pk,nop,pl->nokl", Bm, obs_w * g * g, Bm) + lam * jnp.eye(Bm.shape[1])
+    rhs = jnp.einsum("pk,nop->nok", Bm, obs_w * g * obs_flux) + lam
+    return jnp.linalg.solve(M, rhs[..., None])[..., 0]
 
 
 # ---------------------------------------------------------------------------

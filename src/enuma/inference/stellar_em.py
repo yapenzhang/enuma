@@ -238,19 +238,16 @@ def fit_nights(datasets: Sequence[dict], fit_config: FitConfig = FitConfig(), *,
     r = 0
     while True:
         final = r >= n_rounds
-        # 1. Star step at the current tellurics. The continuum is refitted first (shape
-        #    and scales by alternating linear solves given the template), so smooth
-        #    mismatch never reaches the template.
+        # 1. Star step at the current tellurics. The continuum is refitted first (it is
+        #    linear given the template), so smooth mismatch never reaches the template.
         t0 = time.time()
         G = b = chi2_0 = None
         for i, night in enumerate(nights):
             ctx_t = night.prep.context._replace(
                 stellar_template=sg.nodes_to_grid(beta0, night.geom, night.spec.n_model))
-            sites[i]["continuum_coeffs"], scale = sg.refit_continuum(
+            sites[i]["continuum_coeffs"] = sg.refit_continuum(
                 sites_to_params(sites[i], night.prep.dry_species), ctx_t, night.prep.config,
                 night.prep.layout, night.obs_flux, night.obs_w)
-            if "continuum_log_scale" in night.free:
-                sites[i]["continuum_log_scale"] = scale
             s = sites[i]
             params = sites_to_params(s, night.prep.dry_species)
             Gi, bi, ci, overflow = sg.normal_equations(

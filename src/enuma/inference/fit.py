@@ -179,7 +179,7 @@ def _run_svi(model_kwargs: dict, init_values: Dict[str, jnp.ndarray],
 
 # Sites with one entry per order, and the axis that indexes the order.
 _PER_ORDER_SITES = {"resolution_terms": -2, "wave_terms": -2, "continuum_coeffs": -2,
-                    "wave_drift": -1, "continuum_log_scale": -1}
+                    "wave_drift": -1}
 
 
 def _take_orders(data: dict, order_idx: np.ndarray) -> dict:

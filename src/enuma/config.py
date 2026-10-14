@@ -19,8 +19,8 @@ class FitConfig:
       group is fitted per exposure or shared across a night
       (:func:`~enuma.inference.fit.fit_timeseries` only).
     * **Model sizes**: polynomial degrees and continuum B-spline nodes.
-    * **Instrument and continuum priors**: widths and bounds of the wavelength-shift
-      and resolution terms, and of the per-exposure continuum scales.
+    * **Instrument priors**: widths and bounds of the wavelength-shift and
+      resolution terms.
     * **Atmosphere**: layer grid, GP priors on the T / H2O profiles, observatory
       location, and the reference-profile source (``mipas`` / ``gdas``).
     * **Observation overrides**: ``airmass`` and ``pwv_mm`` when headers are missing
@@ -50,8 +50,8 @@ class FitConfig:
     fit_resolution: bool = True
     #: Fit the per-order wavelength-solution correction (else no shift).
     fit_wave_solution: bool = True
-    #: Fit the per-order B-spline continuum and, in a time series, its per-exposure
-    #: scales (else pinned at 1).
+    #: Fit the per-order B-spline continuum (else pinned at 1); in a time series it
+    #: is fitted per exposure.
     fit_continuum: bool = True
     #: Fit the temperature-profile deviation (else the reference T profile is used).
     fit_temperature: bool = True
@@ -85,10 +85,10 @@ class FitConfig:
     #: Number of Legendre terms of the static per-order wavelength shift
     #: (1 = constant shift, 2 = + linear, 3 = + quadratic).
     n_wave_coeffs: int = 3
-    #: Number of cubic B-spline weights in the static per-order continuum shape.
+    #: Number of cubic B-spline weights in the per-order continuum.
     continuum_n_nodes: int = 20
 
-    # ---- Instrument and continuum priors ----
+    # ---- Instrument priors ----
     #: Prior widths (pixels) of the static wavelength-shift terms, one per Legendre
     #: degree (constant, linear, quadratic, …); the last value repeats for higher
     #: degrees. Every shift and resolution term is bounded at
@@ -101,8 +101,6 @@ class FitConfig:
     resolution_prior: Tuple[float, ...] = (0.05, 0.025)
     #: Prior width of the per-exposure ln R offset shared by all orders.
     resolution_drift_prior: float = 0.05
-    #: Prior width of the per-exposure ln continuum scale of each order.
-    continuum_scale_prior: float = 0.1
     #: Bound of every wavelength-shift and resolution term, in units of its prior
     #: width: the model uses ``B·tanh(u/B)`` of the fitted value ``u``, with
     #: ``B = instrument_bound_sigmas·σ``, which is about ``u`` well inside the bound
@@ -312,7 +310,6 @@ class FitConfig:
                             ("stellar_gp_sigma", self.stellar_gp_sigma),
                             ("wave_drift_prior_pix", self.wave_drift_prior_pix),
                             ("resolution_drift_prior", self.resolution_drift_prior),
-                            ("continuum_scale_prior", self.continuum_scale_prior),
                             ("instrument_bound_sigmas", self.instrument_bound_sigmas)):
             if value <= 0:
                 raise ValueError(f"{name} must be positive; got {value}.")

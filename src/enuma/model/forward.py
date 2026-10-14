@@ -132,7 +132,7 @@ def apply_custom_lsf(model_flux: jnp.ndarray, kernel: jnp.ndarray) -> jnp.ndarra
 
 #: Per-exposure terms of a night; they are centred over the night before use, so
 #: the static terms carry the night means.
-NIGHT_TERMS = ("wave_drift", "resolution_drift", "continuum_log_scale")
+NIGHT_TERMS = ("wave_drift", "resolution_drift")
 
 
 def legendre_basis(x: jnp.ndarray, n: int) -> jnp.ndarray:
@@ -400,14 +400,11 @@ def _transmission(params: ModelParameters, ctx: ModelContext,
     )
 
 
-def continuum_model(params: ModelParameters, ctx: ModelContext,
-                    config: ModelConfig) -> jnp.ndarray:
-    """Continuum of one exposure on the observed grid, ``(n_orders, n_pixels)``: each
-    order's static B-spline shape times its per-exposure scale."""
-    shape = jax.vmap(lambda w: jnp.matmul(ctx.cont_bspline_matrix, w,
-                                          precision=MATMUL_PRECISION))(params.continuum_coeffs)
-    log_scale = jnp.broadcast_to(params.continuum_log_scale, shape.shape[:1])
-    return shape * jnp.exp(log_scale)[:, None]
+def continuum_model(params: ModelParameters, ctx: ModelContext) -> jnp.ndarray:
+    """Per-order continuum of one exposure on the observed grid: the B-spline basis
+    times the fitted per-order weights, ``(n_orders, n_pixels)``."""
+    return jax.vmap(lambda w: jnp.matmul(ctx.cont_bspline_matrix, w,
+                                         precision=MATMUL_PRECISION))(params.continuum_coeffs)
 
 
 @partial(jax.jit, static_argnums=(2,))
@@ -415,7 +412,7 @@ def forward_model(params: ModelParameters, ctx: ModelContext,
                   config: ModelConfig) -> jnp.ndarray:
     """Full modelled flux on the observed grid: the telluric (x stellar) transmission
     times the per-order continuum."""
-    return _transmission(params, ctx, config) * continuum_model(params, ctx, config)
+    return _transmission(params, ctx, config) * continuum_model(params, ctx)
 
 
 @partial(jax.jit, static_argnums=(2,))
@@ -431,7 +428,7 @@ def _exposure_inputs(params: ModelParameters, ctx: ModelContext,
                      config: ModelConfig, layout: Layout) -> dict:
     """The per-exposure leaves of a night, each with a leading ``(N,)`` axis, for
     :func:`jax.lax.map` / :func:`jax.lax.scan` over exposures. The per-exposure
-    instrument and continuum terms are centred over the night first."""
+    instrument drifts are centred over the night first."""
     N = layout.n_exp
     centred = centre_night_terms(params, layout)
 
@@ -443,6 +440,7 @@ def _exposure_inputs(params: ModelParameters, ctx: ModelContext,
     mapped = dict(
         t_latent=stack(params.t_latent, "t_latent"),
         h2o_latent=stack(params.h2o_latent, "h2o_latent"),
+        continuum_coeffs=stack(params.continuum_coeffs, "continuum_coeffs"),
         dry={s: stack(v, f"dry_vmr_{s}") for s, v in params.dry_vmr_scalars.items()},
         airmass=ctx.airmass,
         baryrv=ctx.baryrv,
@@ -457,9 +455,10 @@ def _exposure_slice(params: ModelParameters, ctx: ModelContext, config: ModelCon
                     ex: dict) -> Tuple[ModelParameters, ModelContext]:
     """Single-exposure ``(params, ctx)`` from one slice of :func:`_exposure_inputs`."""
     params_i = params._replace(
-        t_latent=ex["t_latent"], h2o_latent=ex["h2o_latent"], dry_vmr_scalars=ex["dry"],
+        t_latent=ex["t_latent"], h2o_latent=ex["h2o_latent"],
+        continuum_coeffs=ex["continuum_coeffs"], dry_vmr_scalars=ex["dry"],
         **{name: ex[name] for name in NIGHT_TERMS},
-    )  # the static instrument and continuum terms, rv_systemic and vsini stay shared
+    )  # the static instrument terms, rv_systemic and vsini stay shared
     ctx_i = ctx._replace(airmass=ex["airmass"], baryrv=ex["baryrv"])
     if config.wind_enabled:
         ctx_i = ctx_i._replace(wind_v_los=ex["wind_v_los"])

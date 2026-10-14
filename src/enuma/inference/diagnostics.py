@@ -1,9 +1,9 @@
-"""Post-fit report on the instrument terms and the continuum scales.
+"""Post-fit report on the instrument terms (wavelength solution and resolution).
 
 For every order it gives the static wavelength-shift and resolution terms in
-physical units, the range of the per-exposure drifts and continuum scales, the terms
-pressed against their bounds, and how much of the order's constraint on a constant
-shift and R level comes from telluric lines and how much from stellar lines.
+physical units, the range of the per-exposure drifts, the terms pressed against
+their bounds, and how much of the order's constraint on a constant shift and R
+level comes from telluric lines and how much from stellar lines.
 """
 
 import logging
@@ -70,7 +70,7 @@ def _information(result, i: int):
     params, ctx, flux, err, mask = _exposure(result, i)
     ok = mask & np.isfinite(flux) & np.isfinite(err) & (err > 0)
     w = np.where(ok, 1.0 / np.where(ok, err, 1.0) ** 2, 0.0)
-    cont = np.asarray(continuum_model(params, ctx, config))
+    cont = np.asarray(continuum_model(params, ctx))
     # Fitted value → bounded term: the slope of B·tanh(u/B) at the current values.
     c = config.instrument_bound_sigmas
     ud = np.broadcast_to(np.asarray(params.wave_drift), cont.shape[:1])
@@ -103,9 +103,9 @@ def instrument_report(result, *, information: bool = True,
         ``{"orders": [per-order dict], "flags": [str]}``. Each order dict holds the
         static shift terms (``shift_px``, Legendre, pixels), the R level and slope
         (``R_level``, ``log_r_slope``), the largest per-exposure drift
-        (``max_drift_px``) and continuum-scale range (``scale_range``), and, with
-        ``information``, the night's telluric and stellar information on a constant
-        shift and ln R (``info_telluric``, ``info_stellar``; ``None`` without a star).
+        (``max_drift_px``), and, with ``information``, the night's telluric and
+        stellar information on a constant shift and ln R (``info_telluric``,
+        ``info_stellar``; ``None`` without a star).
     """
     config, layout = result.config, result.layout
     params = centre_night_terms(result.params, layout)
@@ -121,7 +121,6 @@ def instrument_report(result, *, information: bool = True,
     wave = np.asarray(result.context.obs_wave)
 
     drift = np.broadcast_to(t.wave_drift, (n_exp, n_orders))
-    log_scale = np.broadcast_to(np.asarray(params.continuum_log_scale), (n_exp, n_orders))
     if information:
         i = layout.n_exp // 2 if exposure is None else exposure
         info_t, info_s = _information(result, i)
@@ -145,10 +144,7 @@ def instrument_report(result, *, information: bool = True,
         row = dict(order=o, wave_nm=(float(wave[o].min()), float(wave[o].max())),
                    shift_px=t.wave[o].tolist(), R_level=float(r0 * np.exp(t.log_r[o, 0])),
                    log_r_slope=(float(t.log_r[o, 1]) if t.log_r.shape[1] > 1 else 0.0),
-                   max_drift_px=max_drift,
-                   scale_range=(float(np.exp(log_scale[:, o].min())),
-                                float(np.exp(log_scale[:, o].max()))),
-                   pressed=pressed)
+                   max_drift_px=max_drift, pressed=pressed)
         if information:
             row["info_telluric"] = info_t[o].tolist()
             row["info_stellar"] = None if info_s is None else info_s[o].tolist()
@@ -178,7 +174,7 @@ def instrument_report(result, *, information: bool = True,
 def _log(rows, n_exp, r0, information, stellar):
     """One INFO line per order."""
     head = (f"Instrument (R0 = {r0 / 1e3:.0f}k): order, nm, shift P0/P1/... (px), "
-            f"R level (k), ln R slope" + (", max |drift| (px), continuum scale" if n_exp else ""))
+            f"R level (k), ln R slope" + (", max |drift| (px)" if n_exp else ""))
     if information:
         head += ", telluric sigma(shift px, ln R)" + (", star : telluric info" if stellar else "")
     logger.info(head)
@@ -187,7 +183,7 @@ def _log(rows, n_exp, r0, information, stellar):
                 + " ".join(f"{a:+.2f}" for a in r["shift_px"])
                 + f"  {r['R_level'] / 1e3:6.1f}  {r['log_r_slope']:+.3f}")
         if n_exp:
-            line += f"  {r['max_drift_px']:.2f}  {r['scale_range'][0]:.3f}-{r['scale_range'][1]:.3f}"
+            line += f"  {r['max_drift_px']:.2f}"
         if information:
             sig = [1.0 / np.sqrt(max(x, 1e-30)) for x in r["info_telluric"]]
             line += f"  {sig[0]:.4f} {sig[1]:.4f}"

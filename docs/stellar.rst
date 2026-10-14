@@ -175,9 +175,8 @@ The loop
 
 1. Fit each night with the fixed NewEra template, giving tellurics θ and the RV.
    The RV is then held fixed: it defines the template's rest frame.
-2. **Star step**: refit the continuum (its static shape and per-exposure scales,
-   by alternating linear solves once the template is fixed), build ``A_n`` at θ,
-   refit the hyperparameters, and solve for the template.
+2. **Star step**: refit the continuum (linear once the template is fixed), build
+   ``A_n`` at θ, refit the hyperparameters, and solve for the template.
 3. **Telluric step**: refit θ with the template fixed. This is the usual SVI,
    warm-started, with ``stellar_mstep_steps`` steps.
 4. Repeat ``stellar_em_iterations`` times, then finish with a star step at the

@@ -15,9 +15,8 @@ steps:
    resolving power of 10\ :sup:`6`.
 3. **Instrument**: convolution with the line-spread function, wavelength-solution
    correction, and resampling onto the detector pixels.
-4. **Continuum**: multiplication by a per-order spline continuum (with a scale per
-   exposure in a time series), and optional multiplication by a stellar template
-   spectrum.
+4. **Continuum**: multiplication by a per-order spline continuum, and optional
+   multiplication by a stellar template spectrum.
 
 Every step is written in JAX, so the whole model is differentiable and runs on
 CPU or GPU.
@@ -179,8 +178,9 @@ fitted value ``u`` (in pixels or ln R). The model uses it through a bound:
 * ``|t|`` never exceeds ``B``. Orders with few telluric lines take their
   instrument largely from the stellar lines. There, an imperfect stellar template
   could otherwise drive R or the shift to unphysical values.
-* The R bound is relative to ``resolution``, so set it within about a factor of
-  2 of the true resolving power.
+* The R bound is relative to ``resolution``: with the default widths the R level
+  stays within a factor ``exp(±4 × 0.05) ≈ 0.82–1.22`` of it, so set ``resolution``
+  close to the instrument's resolving power.
 
 The widths are set per Legendre degree:
 
@@ -198,7 +198,7 @@ The widths are set per Legendre degree:
      - 0.25
      - ``wave_drift_prior_pix``
    * - static ln R ``b_k``
-     - 0.2, 0.075
+     - 0.05, 0.025
      - ``resolution_prior``
    * - per-exposure ln R ``g_n``
      - 0.05
@@ -211,14 +211,10 @@ whether that order's shift and R are set mainly by telluric or by stellar lines.
 Continuum
 ---------
 
-Each order is multiplied by a smooth continuum: a cubic B-spline across the order
-with ``continuum_n_nodes`` weights (20 by default). This absorbs the residual
-blaze, continuum absorption and normalisation errors.
-
-* The shape is static: one set of weights per order, shared by all exposures.
-* In a time series, each exposure and order adds a scale ``s_n`` for the varying
-  throughput, with ``ln s_n ~ Normal(0, continuum_scale_prior)`` and zero mean
-  over the night.
+Each order (and, in a time series, each exposure) is multiplied by a smooth
+continuum: a cubic B-spline across the order with ``continuum_n_nodes`` weights
+(20 by default). This absorbs the residual blaze, continuum absorption, throughput
+variations and normalisation errors.
 
 
 **Stellar template (optional).** With ``stellar_enabled=True``, the transmission

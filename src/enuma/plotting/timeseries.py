@@ -255,10 +255,9 @@ def plot_timeseries_parameters(result, output_path: str = "timeseries_parameters
     over the sensitive layers), and a temperature proxy (mean ΔT/T over those
     layers). Airmass is overlaid on the dry-species and H2O panels (twin axis) so
     transparency correlations are visible. The bottom row shows the per-exposure
-    instrument and continuum terms about their night means: the wavelength drift of
-    each order, the resolution factor shared by all orders, and the continuum scale
-    of each order. Shared scalars (vsini, systemic RV, mean R) are annotated in the
-    title.
+    instrument drifts about their night means: the wavelength drift of each order and
+    the resolution factor shared by all orders. Shared scalars (vsini, systemic RV,
+    mean R) are annotated in the title.
 
     ``result`` is a :class:`enuma.inference.fit.FitResult` from a time-series fit.
     """
@@ -293,7 +292,8 @@ def plot_timeseries_parameters(result, output_path: str = "timeseries_parameters
         return axt
 
     fig, grid = plt.subplots(2, 3, figsize=(15, 8), sharex=True, constrained_layout=True)
-    axes, inst = grid[0], grid[1]
+    axes, inst = grid[0], grid[1][:2]
+    grid[1][2].set_visible(False)
 
     # Panel 0: dry-species relative columns + airmass twin.
     for i, (s, rel, per_exp) in enumerate(dry_traces):
@@ -316,24 +316,20 @@ def plot_timeseries_parameters(result, output_path: str = "timeseries_parameters
     # axes[2].axhline(0.0, color="k", ls=":", lw=0.8, alpha=0.6)
     axes[2].set(ylabel=r"Mean $\Delta T/T_{\rm ref}$ [%]", title="Temperature proxy")
 
-    # Bottom row: the per-exposure instrument and continuum terms (night mean 0).
+    # Bottom row: the per-exposure instrument drifts (night mean 0).
     cfg = result.config
     terms = jax.tree_util.tree_map(np.asarray, instrument_terms(
         centre_night_terms(p, result.layout), cfg))
     n_ord = terms.wave.shape[0]
     drift = np.broadcast_to(terms.wave_drift, (n_exp, n_ord))
     r_factor = np.exp(np.broadcast_to(terms.log_r_drift, (n_exp,)))
-    scale = np.exp(np.broadcast_to(
-        np.asarray(centre_night_terms(p, result.layout).continuum_log_scale), (n_exp, n_ord)))
     colors = plt.cm.viridis(np.linspace(0.0, 1.0, n_ord))
     for o in range(n_ord):
         inst[0].plot(x, drift[:, o], "-", color=colors[o], lw=0.9)
-        inst[2].plot(x, scale[:, o], "-", color=colors[o], lw=0.9)
     inst[0].set(ylabel="Shift about the night mean (pixels)",
                 title="Wavelength drift, one line per order")
     inst[1].plot(x, r_factor, "C2.-", lw=1.2)
     inst[1].set(ylabel=r"$R / R_{\rm night}$", title="Resolution factor (all orders)")
-    inst[2].set(ylabel="Scale about the night mean", title="Continuum scale, one line per order")
     _airmass_twin(inst[1])
 
     for ax in (*axes, *inst):

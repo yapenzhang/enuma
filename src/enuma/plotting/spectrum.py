@@ -109,7 +109,7 @@ def plot_fit_results(
 
     _set_plot_style()
 
-    continuum_all = np.asarray(continuum_model(optimized_params, context, config))
+    continuum_all = np.asarray(continuum_model(optimized_params, context))
     _plot_spectrum_figure(continuum_all, wave_nm, obs_flux_np, flux_opt,
                           flux_tell, obs_mask_np, model_m, output_path)
 
@@ -286,7 +286,7 @@ def plot_residuals_diagnostic(
     with np.errstate(divide="ignore", invalid="ignore"):
         residuals = obs_np / model_flux - 1.0
     if flux_cmp is not None:
-        continuum = np.asarray(continuum_model(optimized_params, context, config))
+        continuum = np.asarray(continuum_model(optimized_params, context))
         residuals_cmp = obs_np / flux_cmp / continuum - 1.0
         residuals_cmp -= np.nanmedian(residuals_cmp, axis=1, keepdims=True)
     else:

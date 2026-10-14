@@ -96,8 +96,8 @@ leading ``(N,)`` axis.
        **pixels**, before the bound.
    * - ``continuum_coeffs``
      - ``(O, continuum_n_nodes)``
-     - Weights of the static per-order cubic B-spline continuum (about 1 for
-       normalised data).
+     - Weights of the per-order cubic B-spline continuum (about 1 for normalised
+       data); per exposure, ``(N, O, continuum_n_nodes)``, in a time series.
    * - ``wave_drift``
      - ``(N, O)``
      - Time series: per-exposure shift of each order in pixels (zero mean over the
@@ -105,10 +105,6 @@ leading ``(N,)`` axis.
    * - ``resolution_drift``
      - ``(N,)``
      - Time series: per-exposure ln R offset shared by all orders, before the bound.
-   * - ``continuum_log_scale``
-     - ``(N, O)``
-     - Time series: per-exposure ln continuum scale of each order (zero mean over
-       the night).
    * - ``rv_systemic``
      - scalar
      - Systemic radial velocity of the star (km/s); used only with a stellar
