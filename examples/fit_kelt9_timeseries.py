@@ -15,7 +15,7 @@ from enuma.model.forward import forward_model_batched
 DATA = "KELT9_2024-08-08_raw.h5"     # input multi-exposure .h5
 WAVE_RANGE = (685.0, 773.0)          # nm; keeps orders fully inside  (685,773, 695)
 SPECIES = ("h2o", "o2")              # h2o is per-exposure; the rest share a column
-MAX_STEPS = 600                      # max SVI steps (adaptive stop)
+MAX_STEPS = 1000                      # max SVI steps (adaptive stop)
 STELLAR_TEFF = None                  # stellar template Teff (K); None disables it
 STELLAR_LOGG = 4.5                   # stellar log g (cgs)
 VSINI = 111.0                        # stellar vsini (km/s)
@@ -52,10 +52,10 @@ def main() -> int:
     # --- configure the fit ---
     fc = FitConfig(
         species=SPECIES, fit_species=SPECIES,
-        fit_temperature=False,   # per-exposure T profile
-        fit_continuum=True,     # per-exposure blaze/throughput
-        fit_resolution=True,    # shared LSF across the night
-        fit_wave_solution=False,                   # shared wave solution
+        fit_temperature=True,   # per-exposure T profile
+        fit_continuum=True,     # static shape per order, scale per exposure
+        fit_resolution=True,    # static per order, ln R offset per exposure (seeing)
+        fit_wave_solution=True,                   # no wavelength correction
         dry_vmr_per_exposure=False,        # else shared (airmass lever)
         temperature_per_exposure=False,
         max_steps=MAX_STEPS,
@@ -71,7 +71,8 @@ def main() -> int:
             stellar_logg=STELLAR_LOGG, vsini=VSINI,
             fit_rv=False, fit_vsini=False, stellar_rot_half_width=401)
 
-    # --- joint multi-exposure fit (shared dry VMRs/LSF/wave; per-exposure T/H2O/continuum) ---
+    # --- joint multi-exposure fit (shared dry VMRs; per-exposure H2O; static instrument and
+    #     continuum shapes with per-exposure offsets) ---
     res = fit_timeseries(data, fc)
 
     # --- save best-fit sites + model/telluric cubes + diagnostic ---

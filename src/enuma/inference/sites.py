@@ -2,7 +2,6 @@ from dataclasses import dataclass
 from typing import Callable, Dict, Optional, Tuple
 
 import jax.numpy as jnp
-import numpy as np
 import numpyro
 import numpyro.distributions as dist
 
@@ -21,6 +20,7 @@ __all__ = [
     "dry_species_of",
     "iter_sites",
     "per_exposure_sites",
+    "is_free",
     "default_params",
     "partition_sites",
     "draw_sites",
@@ -35,6 +35,9 @@ class Param:
     init: Callable[[ModelContext, ModelConfig, Layout], jnp.ndarray]      # default guess
     prior: Callable[[ModelContext, ModelConfig, Layout], dist.Distribution]
     is_free: Callable[[FitConfig], bool]                                 # FitConfig toggle
+    # A per-exposure term of a night (a drift or scale about the night mean): pinned
+    # at its init for a single exposure, where the static terms already carry it.
+    night_only: bool = False
 
 
 def resolve_fit_species(fit_config: FitConfig) -> Tuple[str, ...]:
@@ -44,10 +47,20 @@ def resolve_fit_species(fit_config: FitConfig) -> Tuple[str, ...]:
     return tuple(fit_config.fit_species)
 
 
-def _resolution_loc(config):
-    """Init/prior loc for the *log-space* resolution polynomial. The constant term is 
-    ``log(resolution_init)`` and the λ-dependent terms are 0."""
-    return jnp.zeros(config.n_resolution_coeffs).at[-1].set(float(np.log(config.resolution_init)))
+def _zero_mean_site(name: str, shape, sigma, is_free, night_only: bool = False) -> Param:
+    """A ``Normal(0, sigma(config))`` site initialised at 0. ``shape(context, config)``
+    is its shape without the per-exposure axis, which ``layout`` prepends when it has
+    one; ``sigma`` broadcasts against the trailing axes (e.g. one width per degree)."""
+    def full(c, cfg, L):
+        return L.lead(name) + tuple(shape(c, cfg))
+    return Param(
+        name,
+        init=lambda c, cfg, L: jnp.zeros(full(c, cfg, L)),
+        prior=lambda c, cfg, L: dist.Normal(0.0, jnp.asarray(sigma(cfg))).expand(
+            list(full(c, cfg, L))),
+        is_free=is_free,
+        night_only=night_only,
+    )
 
 
 _T_LATENT = Param(
@@ -64,30 +77,34 @@ _H2O_LATENT = Param(
         list(L.lead("h2o_latent") + (c.h2o_chol_L.shape[1],))),
     is_free=lambda f: "h2o" in resolve_fit_species(f),
 )
-_RESOLUTION = Param(
-    "resolution_coeffs",
-    init=lambda c, cfg, L: jnp.broadcast_to(
-        jnp.tile(_resolution_loc(cfg), (c.obs_wave.shape[0], 1)),
-        L.lead("resolution_coeffs") + (c.obs_wave.shape[0], cfg.n_resolution_coeffs)),
-    prior=lambda c, cfg, L: dist.Normal(_resolution_loc(cfg), 0.05).expand(
-        list(L.lead("resolution_coeffs") + (c.obs_wave.shape[0], cfg.n_resolution_coeffs))),
-    is_free=lambda f: f.fit_resolution,
-)
-_WAVE = Param(
-    "wave_coeffs",
-    init=lambda c, cfg, L: jnp.zeros(L.lead("wave_coeffs") + (c.obs_wave.shape[0], cfg.n_wave_coeffs)),
-    prior=lambda c, cfg, L: dist.Normal(0.0, 0.5).expand(
-        list(L.lead("wave_coeffs") + (c.obs_wave.shape[0], cfg.n_wave_coeffs))),
-    is_free=lambda f: f.fit_wave_solution,
-)
+# Instrument terms in pixels and ln R (see :func:`enuma.model.forward.instrument_terms`,
+# which bounds them): static per-order Legendre terms, plus per-exposure drifts in a
+# night — the wavelength offset of each order and the ln R offset shared by all orders.
+_n_orders = lambda c: c.obs_wave.shape[0]
+_RESOLUTION = _zero_mean_site(
+    "resolution_terms", lambda c, cfg: (_n_orders(c), cfg.n_resolution_coeffs),
+    lambda cfg: cfg.resolution_prior, is_free=lambda f: f.fit_resolution)
+_RESOLUTION_DRIFT = _zero_mean_site(
+    "resolution_drift", lambda c, cfg: (), lambda cfg: cfg.resolution_drift_prior,
+    is_free=lambda f: f.fit_resolution and f.resolution_per_exposure, night_only=True)
+_WAVE = _zero_mean_site(
+    "wave_terms", lambda c, cfg: (_n_orders(c), cfg.n_wave_coeffs),
+    lambda cfg: cfg.wave_prior_pix, is_free=lambda f: f.fit_wave_solution)
+_WAVE_DRIFT = _zero_mean_site(
+    "wave_drift", lambda c, cfg: (_n_orders(c),), lambda cfg: cfg.wave_drift_prior_pix,
+    is_free=lambda f: f.fit_wave_solution and f.wave_per_exposure, night_only=True)
+# Continuum: a static per-order B-spline shape, times a per-exposure scale of each
+# order in a night.
 _CONTINUUM = Param(
     "continuum_coeffs",
-    init=lambda c, cfg, L: jnp.ones(
-        L.lead("continuum_coeffs") + (c.obs_wave.shape[0], c.cont_bspline_matrix.shape[1])),
+    init=lambda c, cfg, L: jnp.ones((_n_orders(c), c.cont_bspline_matrix.shape[1])),
     prior=lambda c, cfg, L: dist.Normal(1.0, 0.1).expand(
-        list(L.lead("continuum_coeffs") + (c.obs_wave.shape[0], c.cont_bspline_matrix.shape[1]))),
+        [_n_orders(c), c.cont_bspline_matrix.shape[1]]),
     is_free=lambda f: f.fit_continuum,
 )
+_CONTINUUM_SCALE = _zero_mean_site(
+    "continuum_log_scale", lambda c, cfg: (_n_orders(c),), lambda cfg: cfg.continuum_scale_prior,
+    is_free=lambda f: f.fit_continuum, night_only=True)
 
 # Stellar Doppler shift + rotation. Free only when the stellar template is on
 # (``stellar_enabled``); the init/prior mean come from the config (the systemic-RV
@@ -135,20 +152,21 @@ def dry_species_of(context: ModelContext,
 def iter_sites(dry_species: Tuple[str, ...]) -> Tuple[Param, ...]:
     """The full ordered site spec, with the dry-column family spliced in."""
     return (_T_LATENT, _H2O_LATENT, *(_dry_site(s) for s in dry_species),
-            _RESOLUTION, _WAVE, _CONTINUUM, _RV_SYSTEMIC, _VSINI)
+            _RESOLUTION, _RESOLUTION_DRIFT, _WAVE, _WAVE_DRIFT, _CONTINUUM, _CONTINUUM_SCALE,
+            _RV_SYSTEMIC, _VSINI)
 
 
 def per_exposure_sites(fit_config: FitConfig, dry_species: Tuple[str, ...]) -> frozenset:
     """Site names that carry a leading per-exposure ``(N,)`` axis in a night fit.
 
-    The continuum is always per exposure; the temperature/H2O profiles, the
-    dry-species columns, and the instrument LSF / wavelength solution are per
-    exposure or shared per the ``FitConfig`` knobs (``temperature_per_exposure`` /
-    ``h2o_per_exposure`` / ``dry_vmr_per_exposure`` / ``resolution_per_exposure`` /
-    ``wave_per_exposure``). A single-exposure fit never calls this — it uses the
-    default empty ``Layout``.
+    The continuum scales are always per exposure. The temperature/H2O profiles and
+    the dry-species columns are per exposure or shared per the ``FitConfig`` knobs
+    (``temperature_per_exposure`` / ``h2o_per_exposure`` / ``dry_vmr_per_exposure``).
+    The wavelength solution and R(λ) are static per order, plus per-exposure drifts
+    with ``wave_per_exposure`` / ``resolution_per_exposure``. A single-exposure fit
+    never calls this — it uses the default empty ``Layout``.
     """
-    names = {"continuum_coeffs"}
+    names = {"continuum_log_scale"}
     if fit_config.temperature_per_exposure:
         names.add("t_latent")
     if fit_config.h2o_per_exposure:
@@ -156,10 +174,16 @@ def per_exposure_sites(fit_config: FitConfig, dry_species: Tuple[str, ...]) -> f
     if fit_config.dry_vmr_per_exposure:
         names |= {f"dry_vmr_{s}" for s in dry_species}
     if fit_config.resolution_per_exposure:
-        names.add("resolution_coeffs")
+        names.add("resolution_drift")
     if fit_config.wave_per_exposure:
-        names.add("wave_coeffs")
+        names.add("wave_drift")
     return frozenset(names)
+
+
+def is_free(site: Param, fit_config: FitConfig, layout: Layout) -> bool:
+    """Whether ``site`` is fitted: its ``FitConfig`` toggle, and a night for the
+    per-exposure terms."""
+    return site.is_free(fit_config) and (layout.n_exp > 0 or not site.night_only)
 
 
 def default_params(context: ModelContext, config: ModelConfig,
@@ -182,7 +206,7 @@ def partition_sites(
     """
     fixed, free_init = {}, {}
     for site in iter_sites(dry_species):
-        target = free_init if site.is_free(fit_config) else fixed
+        target = free_init if is_free(site, fit_config, layout) else fixed
         target[site.name] = site.init(context, config, layout)
     return fixed, free_init
 

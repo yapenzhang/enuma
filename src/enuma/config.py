@@ -19,6 +19,8 @@ class FitConfig:
       group is fitted per exposure or shared across a night
       (:func:`~enuma.inference.fit.fit_timeseries` only).
     * **Model sizes**: polynomial degrees and continuum B-spline nodes.
+    * **Instrument and continuum priors**: widths and bounds of the wavelength-shift
+      and resolution terms, and of the per-exposure continuum scales.
     * **Atmosphere**: layer grid, GP priors on the T / H2O profiles, observatory
       location, and the reference-profile source (``mipas`` / ``gdas``).
     * **Observation overrides**: ``airmass`` and ``pwv_mm`` when headers are missing
@@ -29,6 +31,8 @@ class FitConfig:
     * **Data locations**: opacity directory and download cache.
     * **Stellar template**: PHOENIX-NewEra template selection and the stellar RV /
       rotation.
+    * **Learned stellar template**: ``stellar_model="gp"`` and its ``stellar_*``
+      knobs, which learn the stellar spectrum from the data.
 
     Names are case-insensitive (canonicalised to lower case), and sequences are
     converted to tuples on construction.
@@ -46,7 +50,8 @@ class FitConfig:
     fit_resolution: bool = True
     #: Fit the per-order wavelength-solution correction (else no shift).
     fit_wave_solution: bool = True
-    #: Fit the per-order B-spline continuum (else pinned at 1).
+    #: Fit the per-order B-spline continuum and, in a time series, its per-exposure
+    #: scales (else pinned at 1).
     fit_continuum: bool = True
     #: Fit the temperature-profile deviation (else the reference T profile is used).
     fit_temperature: bool = True
@@ -65,20 +70,44 @@ class FitConfig:
     temperature_per_exposure: bool = True
     #: Fit the H2O profile per exposure, or share it; time series only.
     h2o_per_exposure: bool = True
-    #: Fit the resolution R(λ) per exposure, or share it; time series only.
+    #: Add a per-exposure ln R offset, shared by all orders (seeing), to the static
+    #: per-order R(λ); time series only. Else R(λ) is shared across the night.
     resolution_per_exposure: bool = True
-    #: Fit the wavelength solution per exposure, or share it; time series only.
+    #: Add a per-exposure wavelength offset of each order (instrument drift) to the
+    #: static per-order wavelength solution; time series only. Else the wavelength
+    #: solution is shared across the night.
     wave_per_exposure: bool = True
 
     # ---- Polynomial degrees / sizes ----
-    #: Number of coefficients of the per-order log-resolution polynomial
+    #: Number of Legendre terms of the static per-order ln R(λ)
     #: (1 = constant R, 2 = linear in λ).
     n_resolution_coeffs: int = 2
-    #: Number of coefficients of the per-order wavelength-shift polynomial
+    #: Number of Legendre terms of the static per-order wavelength shift
     #: (1 = constant shift, 2 = + linear, 3 = + quadratic).
     n_wave_coeffs: int = 3
-    #: Number of cubic B-spline weights in the per-order continuum.
+    #: Number of cubic B-spline weights in the static per-order continuum shape.
     continuum_n_nodes: int = 20
+
+    # ---- Instrument and continuum priors ----
+    #: Prior widths (pixels) of the static wavelength-shift terms, one per Legendre
+    #: degree (constant, linear, quadratic, …); the last value repeats for higher
+    #: degrees. Every shift and resolution term is bounded at
+    #: ``instrument_bound_sigmas`` times its width.
+    wave_prior_pix: Tuple[float, ...] = (0.5, 0.3, 0.3)
+    #: Prior width (pixels) of the per-exposure wavelength offset of each order.
+    wave_drift_prior_pix: float = 0.25
+    #: Prior widths of the static ln R terms, one per Legendre degree (level relative
+    #: to ``resolution``, slope, …); the last value repeats for higher degrees.
+    resolution_prior: Tuple[float, ...] = (0.05, 0.025)
+    #: Prior width of the per-exposure ln R offset shared by all orders.
+    resolution_drift_prior: float = 0.05
+    #: Prior width of the per-exposure ln continuum scale of each order.
+    continuum_scale_prior: float = 0.1
+    #: Bound of every wavelength-shift and resolution term, in units of its prior
+    #: width: the model uses ``B·tanh(u/B)`` of the fitted value ``u``, with
+    #: ``B = instrument_bound_sigmas·σ``, which is about ``u`` well inside the bound
+    #: and never beyond it.
+    instrument_bound_sigmas: float = 4.0
 
     # ---- GP priors on the per-layer T and H2O dex deviations ----
     #: GP kernel for the temperature deviation, one of ``"matern52"``,
@@ -220,6 +249,34 @@ class FitConfig:
     #: Linear limb-darkening coefficient of the rotation kernel.
     stellar_epsilon: float = 0.6
 
+    # ---- Learned stellar template (stellar_model="gp") ----
+    #: ``"newera"`` multiplies the fixed PHOENIX-NewEra template (when
+    #: ``stellar_enabled``). ``"gp"`` learns the stellar spectrum from the data, in
+    #: one or several nights (:func:`~enuma.inference.stellar_em.fit_nights`); it
+    #: needs a time series.
+    stellar_model: str = "newera"
+    #: Anchor of the learned template's prior: ``"newera"`` (the template selected by
+    #: ``stellar_teff`` / ``stellar_logg`` / …, rotated by the fitted vsini),
+    #: ``"flat"``, or a path to a two-column text file (rest-frame wavelength in
+    #: nm, continuum-normalised flux).
+    stellar_reference: str = "newera"
+    #: Spacing of the template nodes (km/s); rounded to a whole number of
+    #: model-grid samples.
+    stellar_node_kms: float = 0.6
+    #: Starting correlation length of the template prior (km/s), about a stellar
+    #: line width; refined by the evidence.
+    stellar_gp_length_kms: float = 3.0
+    #: Starting amplitude of the template prior (relative flux); refined by the
+    #: evidence, per order.
+    stellar_gp_sigma: float = 0.05
+    #: Rounds of (star step, telluric step) after the initial NewEra fit.
+    stellar_em_iterations: int = 5
+    #: SVI steps of each telluric step (warm-started from the previous round).
+    stellar_mstep_steps: int = 300
+    #: Stop early when the relative change of −2 ln(evidence) between rounds falls
+    #: below this; ``0`` always runs ``stellar_em_iterations`` rounds.
+    stellar_em_tol: float = 0.0
+
     def __post_init__(self):
         """Canonicalise (lower-case names, tuple-convert sequences) and validate the
         config-only invariants in place, so every ``FitConfig`` is canonical once
@@ -245,6 +302,26 @@ class FitConfig:
                              "velocity[km/s], amplitude text file).")
         _set(self, "reference_profile_source", self.reference_profile_source.lower())
         _set(self, "stellar_grid", self.stellar_grid.lower())
+        _set(self, "stellar_model", self.stellar_model.lower())
+        if self.stellar_model not in ("newera", "gp"):
+            raise ValueError(f"stellar_model must be 'newera' or 'gp'; got {self.stellar_model!r}.")
+        if self.stellar_reference.lower() in ("newera", "flat"):
+            _set(self, "stellar_reference", self.stellar_reference.lower())
+        for name, value in (("stellar_node_kms", self.stellar_node_kms),
+                            ("stellar_gp_length_kms", self.stellar_gp_length_kms),
+                            ("stellar_gp_sigma", self.stellar_gp_sigma),
+                            ("wave_drift_prior_pix", self.wave_drift_prior_pix),
+                            ("resolution_drift_prior", self.resolution_drift_prior),
+                            ("continuum_scale_prior", self.continuum_scale_prior),
+                            ("instrument_bound_sigmas", self.instrument_bound_sigmas)):
+            if value <= 0:
+                raise ValueError(f"{name} must be positive; got {value}.")
+        for name in ("wave_prior_pix", "resolution_prior"):
+            widths = tuple(float(x) for x in getattr(self, name))
+            if not widths or min(widths) <= 0:
+                raise ValueError(f"{name} must be a non-empty sequence of positive widths; "
+                                 f"got {getattr(self, name)}.")
+            _set(self, name, widths)
         for name, value, low in (("n_layers", self.n_layers, 4),
                                  ("continuum_n_nodes", self.continuum_n_nodes, 4),
                                  ("n_wave_coeffs", self.n_wave_coeffs, 1),

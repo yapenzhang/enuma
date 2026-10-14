@@ -17,6 +17,7 @@ differentiable; fitting runs in NumPyro via SVI (Stochastic Variational Inferenc
    installation
    method
    getstarted
+   stellar
    outputs
 
 .. toctree::

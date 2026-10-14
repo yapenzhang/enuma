@@ -15,8 +15,9 @@ steps:
    resolving power of 10\ :sup:`6`.
 3. **Instrument**: convolution with the line-spread function, wavelength-solution
    correction, and resampling onto the detector pixels.
-4. **Continuum**: multiplication by a per-order spline continuum, and optional 
-    multiplication by a stellar template spectrum.
+4. **Continuum**: multiplication by a per-order spline continuum (with a scale per
+   exposure in a time series), and optional multiplication by a stellar template
+   spectrum.
 
 Every step is written in JAX, so the whole model is differentiable and runs on
 CPU or GPU.
@@ -103,9 +104,22 @@ Line-spread function
 
 The high-resolution spectrum of each order is convolved with the instrument
 line-spread function (LSF). Its width follows from a resolving power that may vary
-across the order, ``R(x) = 10^5 · exp(poly(x))`` with ``x`` from −1 to 1 across the
-order and ``n_resolution_coeffs`` coefficients (1 gives a constant R; the
-default, 2, lets R vary linearly across the order). 
+across the order:
+
+.. code-block:: text
+
+    ln R(x) = ln R₀ + Σ_k b_k P_k(x)  [+ g_n in a time series]
+
+* ``x`` runs from −1 to 1 across the observed order, and ``P_k`` are Legendre
+  polynomials. ``n_resolution_coeffs`` sets the number of terms: 1 gives a constant
+  R; the default, 2, lets R vary linearly across the order.
+* ``R₀ = resolution × 10⁵`` is the centre of the prior. The terms ``b_k`` are static,
+  one set per order.
+* In a time series with ``resolution_per_exposure=True`` (the default), each
+  exposure adds one ln R offset ``g_n``, shared by all orders (seeing). The offsets
+  have zero mean over the night, so ``R₀·exp(b₀)`` is the night-mean R level of
+  the order.
+
 Three LSF shapes are available through ``lsf_profile``:
 
 ``"gaussian"`` (default)
@@ -136,24 +150,83 @@ Three LSF shapes are available through ``lsf_profile``:
 Wavelength solution and resampling
 ----------------------------------
 
-The fit can optionally correct the wavelength solution of each order with a polynomial shift
-in pixels, ``poly(x)`` with ``n_wave_coeffs`` coefficients (3rd-order polynomial by default). 
+The fit can correct the wavelength solution of each order with a shift in pixels:
+
+.. code-block:: text
+
+    shift(x) = Σ_k a_k P_k(x)  [+ d_n in a time series]
+
+* The Legendre terms ``a_k`` are static, one set per order, with
+  ``n_wave_coeffs`` terms (3 by default: offset, linear, quadratic).
+* In a time series with ``wave_per_exposure=True`` (the default), each exposure
+  adds a constant offset ``d_n`` per order, for the instrument drift. The offsets
+  have zero mean over the night, so ``a₀`` is the night-mean shift of the order.
+
 The convolved model is then resampled to the wavelengths of the observed spectrum.
+
+Priors and bounds
+-----------------
+
+Every wavelength-shift and resolution term has a Normal prior of width ``σ`` on its
+fitted value ``u`` (in pixels or ln R). The model uses it through a bound:
+
+.. code-block:: text
+
+    t = B · tanh(u / B),    u ~ Normal(0, σ),    B = instrument_bound_sigmas · σ  (4σ)
+
+* Well inside the bound, ``t ≈ u``, so the optimiser moves the terms in their
+  physical units.
+* ``|t|`` never exceeds ``B``. Orders with few telluric lines take their
+  instrument largely from the stellar lines. There, an imperfect stellar template
+  could otherwise drive R or the shift to unphysical values.
+* The R bound is relative to ``resolution``, so set it within about a factor of
+  2 of the true resolving power.
+
+The widths are set per Legendre degree:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 40 30 30
+
+   * - Term
+     - Width (default)
+     - Field
+   * - static shift ``a_k`` (pixels)
+     - 0.5, 0.3, 0.3
+     - ``wave_prior_pix``
+   * - per-exposure shift ``d_n`` (pixels)
+     - 0.25
+     - ``wave_drift_prior_pix``
+   * - static ln R ``b_k``
+     - 0.2, 0.075
+     - ``resolution_prior``
+   * - per-exposure ln R ``g_n``
+     - 0.05
+     - ``resolution_drift_prior``
+
+After every fit, :func:`~enuma.inference.diagnostics.instrument_report` logs the
+terms of every order. It warns about any term beyond 75 % of its bound, and says
+whether that order's shift and R are set mainly by telluric or by stellar lines.
 
 Continuum
 ---------
 
-Each order (and, in a time series, each exposure) is multiplied by a smooth
-continuum: a cubic B-spline across the order with ``continuum_n_nodes`` weights
-(20 by default). This absorbs the residual blaze, continuum absorption, throughput variations and
-normalisation errors.
+Each order is multiplied by a smooth continuum: a cubic B-spline across the order
+with ``continuum_n_nodes`` weights (20 by default). This absorbs the residual
+blaze, continuum absorption and normalisation errors.
+
+* The shape is static: one set of weights per order, shared by all exposures.
+* In a time series, each exposure and order adds a scale ``s_n`` for the varying
+  throughput, with ``ln s_n ~ Normal(0, continuum_scale_prior)`` and zero mean
+  over the night.
 
 
 **Stellar template (optional).** With ``stellar_enabled=True``, the transmission
 is multiplied by a normalised PHOENIX-NewEra spectrum on the same high-resolution
 grid before instrument convolution. The template is rotationally broadened (vsini, linear limb darkening
 ``stellar_epsilon``) and shifted by the systemic plus barycentric velocity. See
-:ref:`stellar`.
+:ref:`stellar`. With ``stellar_model="gp"`` the stellar spectrum is instead learned
+from the data; see :ref:`stellar-learned`.
 
 
 

@@ -19,20 +19,26 @@ def main():
         fit_species=species,
         max_steps=1000,
         fit_temperature=True,   # per-exposure T profile
-        fit_continuum=True,     # per-exposure blaze/throughput
-        fit_resolution=True,    # shared LSF across the night
-        fit_wave_solution=True,
+        fit_continuum=True,     # static shape per order, scale per exposure
+        fit_resolution=True,    # static per order, ln R offset per exposure (seeing)
+        fit_wave_solution=True, # static per order, shift per exposure and order
         resolution=1.2, # x 1e5
         dry_vmr_per_exposure=False,   # else shared
+        temperature_per_exposure=False,
         reference_profile_source="gdas",
         observatory="paranal",
         stellar_enabled=True, 
         stellar_teff=3200,
         stellar_logg = 5.0,
         rv_kms = 20.91,
+        # stellar_model="gp",             # ... then the stellar spectrum is learned
+        # stellar_reference="newera",     # prior anchor; the evidence sets its weight per order
+        # stellar_em_iterations=5,
+        # stellar_mstep_steps=300,
     )
 
-    # joint multi-exposure fit (shared dry VMRs/LSF/wave; per-exposure T/H2O/continuum)
+    # joint multi-exposure fit (shared dry VMRs; per-exposure T/H2O; static instrument and
+    # continuum shapes with per-exposure offsets)
     res = fit_timeseries(data, fc)
 
     out = pathlib.Path("mdwarf_fit_out")

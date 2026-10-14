@@ -21,6 +21,7 @@ from enuma.inference.sites import (
     per_exposure_sites,
     resolve_fit_species,
 )
+from enuma.inference.diagnostics import instrument_report
 from enuma.inference.optimizer import run_svi
 from enuma.state import (
     Layout,
@@ -76,6 +77,12 @@ class FitResult(NamedTuple):
     #: Parameter traces ``(recorded_steps, {site_name: trace})`` from the SVI run,
     #: or ``None`` when the result is rebuilt from a saved best fit.
     param_history: Optional[tuple] = None
+    #: The learned stellar template (``stellar_model="gp"``), a
+    #: :class:`~enuma.inference.stellar_gp.StellarTemplate`; ``None`` otherwise.
+    stellar: Optional[object] = None
+    #: One dict per round of the template fit (``stellar_model="gp"``); ``None``
+    #: otherwise. See :func:`~enuma.inference.stellar_em.fit_nights`.
+    stellar_history: Optional[list] = None
 
     def plot(self, output_dir: str = ".", *,
              comparison_fits: Optional[str] = None) -> None:
@@ -87,6 +94,9 @@ class FitResult(NamedTuple):
         if self.layout.n_exp:
             from enuma.plotting import plot_timeseries_diagnostics
             plot_timeseries_diagnostics(self, str(out))
+            if self.stellar is not None:
+                from enuma.plotting import plot_stellar_diagnostics
+                plot_stellar_diagnostics(self, str(out))
             return
 
         from enuma.plotting import (
@@ -167,7 +177,9 @@ def _run_svi(model_kwargs: dict, init_values: Dict[str, jnp.ndarray],
     )
 
 
-_PER_ORDER_SITES = ("resolution_coeffs", "wave_coeffs", "continuum_coeffs")
+# Sites with one entry per order, and the axis that indexes the order.
+_PER_ORDER_SITES = {"resolution_terms": -2, "wave_terms": -2, "continuum_coeffs": -2,
+                    "wave_drift": -1, "continuum_log_scale": -1}
 
 
 def _take_orders(data: dict, order_idx: np.ndarray) -> dict:
@@ -180,9 +192,10 @@ def _take_orders(data: dict, order_idx: np.ndarray) -> dict:
     return out
 
 
-def _set_orders(base: jnp.ndarray, order_idx: np.ndarray, rows: jnp.ndarray) -> jnp.ndarray:
-    """``base`` with its order-axis (-2) entries at ``order_idx`` replaced by ``rows``."""
-    sl = (slice(None),) * (base.ndim - 2) + (jnp.asarray(order_idx),)
+def _set_orders(base: jnp.ndarray, order_idx: np.ndarray, rows: jnp.ndarray,
+                axis: int = -2) -> jnp.ndarray:
+    """``base`` with its order-axis entries at ``order_idx`` replaced by ``rows``."""
+    sl = (slice(None),) * (base.ndim + axis) + (jnp.asarray(order_idx),)
     return base.at[sl].set(rows)
 
 
@@ -214,7 +227,7 @@ def _scatter_to_full(sub_params: ModelParameters, full_context: ModelContext,
     sub_sites = params_to_sites(sub_params)
     out: Dict[str, jnp.ndarray] = {}
     for name, default_val in full_default.items():
-        out[name] = (_set_orders(default_val, order_idx, sub_sites[name])
+        out[name] = (_set_orders(default_val, order_idx, sub_sites[name], _PER_ORDER_SITES[name])
                      if name in _PER_ORDER_SITES else sub_sites[name])
     return sites_to_params(out, dry_species)
 
@@ -239,7 +252,7 @@ def _refit_nuisance(seeded_params: ModelParameters, data: dict, rest_idx: np.nda
         name = site.name
         if name not in _PER_ORDER_SITES:
             fixed_values[name] = seeded_sites[name]        # frozen stage-1 atmosphere
-        elif site.is_free(fit_config):
+        elif name in rest_free:
             init_values[name] = rest_free[name]            # nuisance to fit
         else:
             fixed_values[name] = rest_fixed[name]          # pinned nuisance
@@ -252,35 +265,62 @@ def _refit_nuisance(seeded_params: ModelParameters, data: dict, rest_idx: np.nda
              fixed_values=fixed_values),
         init_values, fit_config, print_freq=print_freq, rng_seed=rng_seed)
 
-    for name in _PER_ORDER_SITES:
+    for name, axis in _PER_ORDER_SITES.items():
         if name in opt_sites:
-            seeded_sites[name] = _set_orders(seeded_sites[name], rest_idx, opt_sites[name])
+            seeded_sites[name] = _set_orders(seeded_sites[name], rest_idx, opt_sites[name], axis)
     return sites_to_params(seeded_sites, dry_species)
 
 
-def _fit_full(data: dict, fit_config: FitConfig, n_exp: int, *,
-              print_freq: int, rng_seed: int, opacities=None) -> FitResult:
-    """Single-pass fit core: load → build context → partition sites → SVI → reassemble."""
+class _Prepared(NamedTuple):
+    """Everything one SVI pass needs for a single exposure or a night."""
+    obs_flux: jnp.ndarray
+    obs_err: jnp.ndarray
+    obs_mask: jnp.ndarray
+    context: ModelContext
+    config: ModelConfig
+    dry_species: Tuple[str, ...]
+    layout: Layout
+    fixed_values: Dict[str, jnp.ndarray]
+    init_values: Dict[str, jnp.ndarray]
+
+
+def _prepare(data: dict, fit_config: FitConfig, n_exp: int, *,
+             opacities=None) -> _Prepared:
+    """Load the observation, build the context and partition the sites."""
     obs_flux, obs_err, obs_mask = _load_observation(data, fit_config)
     context, config = build_context(data, fit_config, Layout(n_exp=n_exp), opacities=opacities)
     dry_species = dry_species_of(context, tuple(fit_config.species))
     per_exp = per_exposure_sites(fit_config, dry_species) if n_exp else frozenset()
     layout = Layout(n_exp=n_exp, per_exposure=per_exp)
     fixed_values, init_values = partition_sites(context, config, fit_config, dry_species, layout)
+    return _Prepared(obs_flux, obs_err, obs_mask, context, config, dry_species, layout,
+                     fixed_values, init_values)
 
+
+def _optimize(prep: _Prepared, data: dict, fit_config: FitConfig, *,
+              print_freq: int, rng_seed: int) -> FitResult:
+    """Run SVI from ``prep.init_values`` with ``prep.fixed_values`` pinned, and
+    reassemble the result."""
     opt_sites, losses, param_history = _run_svi(
-        dict(context=context, config=config, obs_flux=obs_flux, obs_err=obs_err,
-             obs_mask=obs_mask, dry_species=dry_species, layout=layout,
-             fixed_values=fixed_values),
-        init_values, fit_config, print_freq=print_freq, rng_seed=rng_seed)
+        dict(context=prep.context, config=prep.config, obs_flux=prep.obs_flux,
+             obs_err=prep.obs_err, obs_mask=prep.obs_mask, dry_species=prep.dry_species,
+             layout=prep.layout, fixed_values=prep.fixed_values),
+        prep.init_values, fit_config, print_freq=print_freq, rng_seed=rng_seed)
 
-    all_sites = {**opt_sites, **fixed_values}
+    all_sites = {**opt_sites, **prep.fixed_values}
     return FitResult(
-        params=sites_to_params(all_sites, dry_species), sites=all_sites, losses=losses,
-        data=data, obs_mask=obs_mask, context=context, config=config,
-        fit_config=fit_config, dry_species=dry_species, layout=layout,
+        params=sites_to_params(all_sites, prep.dry_species), sites=all_sites, losses=losses,
+        data=data, obs_mask=prep.obs_mask, context=prep.context, config=prep.config,
+        fit_config=fit_config, dry_species=prep.dry_species, layout=prep.layout,
         param_history=param_history,
     )
+
+
+def _fit_full(data: dict, fit_config: FitConfig, n_exp: int, *,
+              print_freq: int, rng_seed: int, opacities=None) -> FitResult:
+    """Single-pass fit core: load → build context → partition sites → SVI → reassemble."""
+    prep = _prepare(data, fit_config, n_exp, opacities=opacities)
+    return _optimize(prep, data, fit_config, print_freq=print_freq, rng_seed=rng_seed)
 
 
 def _fit_windowed(data: dict, fit_config: FitConfig, n_exp: int, *,
@@ -356,14 +396,19 @@ def fit_spectrum(
     Returns:
         A :class:`FitResult`; call ``result.plot(output_dir)`` to write the PDFs.
     """
+    if fit_config.stellar_model == "gp":
+        raise ValueError("stellar_model='gp' learns the stellar spectrum from a time "
+                         "series; use fit_timeseries (one night) or fit_nights (several).")
     logger.info(
         "species=%s, fit_species=%s, steps=%d, backend=%s",
         list(fit_config.species), list(resolve_fit_species(fit_config)),
         fit_config.max_steps, jax.default_backend().upper()
     )
     result = _run_fit(data, fit_config, 0, print_freq=print_freq, rng_seed=rng_seed)
-    
-    save_best_fit_params_json(result.params, save_params_json_path, species=fit_config.species)
+    instrument_report(result)
+
+    save_best_fit_params_json(result.params, save_params_json_path, species=fit_config.species,
+                              config=result.config)
     save_best_fit_spectrum_txt(result.params, result.context, result.config,
                                    save_spectrum_txt_path)
     return result
@@ -399,7 +444,16 @@ def fit_timeseries(data: dict, fit_config: FitConfig = FitConfig(), *,
         Unlike :func:`fit_spectrum`, nothing is written to disk. Save
         ``result.sites`` yourself, and regenerate the model cube with
         :func:`~enuma.model.forward.forward_model_batched`.
+
+        With ``fit_config.stellar_model="gp"`` the stellar spectrum is learned from
+        the data (:func:`~enuma.inference.stellar_em.fit_nights` with one night);
+        the result then also carries ``stellar`` and ``stellar_history``.
     """
+    if fit_config.stellar_model == "gp":
+        from enuma.inference.stellar_em import fit_nights
+        return fit_nights([data], fit_config, print_freq=print_freq,
+                          rng_seed=rng_seed).nights[0]
+
     n_exp = int(np.asarray(data["flux"]).shape[0])
     _pe = lambda flag: "per-exposure" if flag else "shared"
     logger.info(
@@ -410,6 +464,7 @@ def fit_timeseries(data: dict, fit_config: FitConfig = FitConfig(), *,
     )
 
     result = _run_fit(data, fit_config, n_exp, print_freq=print_freq, rng_seed=rng_seed)
+    instrument_report(result)
 
     #TODO: save best-fit params and models
 

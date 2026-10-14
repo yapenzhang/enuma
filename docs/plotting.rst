@@ -19,3 +19,10 @@ Time-series plots
 
 .. automodapi:: enuma.plotting.timeseries
    :no-inheritance-diagram:
+
+
+Learned stellar template plots
+------------------------------
+
+.. automodapi:: enuma.plotting.stellar
+   :no-inheritance-diagram:

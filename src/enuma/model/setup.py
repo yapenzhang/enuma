@@ -55,6 +55,8 @@ class _OrderMeta(NamedTuple):
     order_ref_wave: np.ndarray          # (n_orders,) per-order reference wavelength
     model_wave_off: np.ndarray          # (n_orders, order_size) model λ − ref
     obs_wave_off: np.ndarray            # (n_orders, n_pix) obs λ − ref
+    order_norm_center: np.ndarray       # (n_orders,) obs-order centre − ref
+    order_norm_half: np.ndarray         # (n_orders,) obs-order half-width
 
 
 def _order_metadata(model_wave, obs_wave) -> _OrderMeta:
@@ -87,10 +89,11 @@ def _order_metadata(model_wave, obs_wave) -> _OrderMeta:
     model_wave_off = (model_chunks - order_ref_wave[:, None]).astype(np.float32)
     obs_wave_off = (obs_wave_np - order_ref_wave[:, None]).astype(np.float32)
 
-    # Per-order [-1, 1] coordinate for the wave-shift polynomial.
-    obs_centered = obs_wave_np - obs_wave_np.mean(axis=1, keepdims=True)
-    obs_wave_norm = jnp.asarray(
-        (obs_centered / np.abs(obs_centered).max(axis=1, keepdims=True)).astype(np.float32))
+    # Per-order [-1, 1] coordinate for the wave-shift and resolution polynomials.
+    obs_mean = obs_wave_np.mean(axis=1)
+    obs_centered = obs_wave_np - obs_mean[:, None]
+    obs_half = np.abs(obs_centered).max(axis=1)
+    obs_wave_norm = jnp.asarray((obs_centered / obs_half[:, None]).astype(np.float32))
 
     d = np.diff(obs_wave_np, axis=1)
     obs_d_wave = jnp.asarray(np.concatenate([d, d[:, -1:]], axis=1).astype(np.float32))
@@ -104,7 +107,15 @@ def _order_metadata(model_wave, obs_wave) -> _OrderMeta:
         order_ref_wave=order_ref_wave.astype(np.float32),
         model_wave_off=model_wave_off,
         obs_wave_off=obs_wave_off,
+        order_norm_center=(obs_mean - order_ref_wave).astype(np.float32),
+        order_norm_half=obs_half.astype(np.float32),
     )
+
+
+def _per_degree(widths, n: int) -> Tuple[float, ...]:
+    """``n`` prior widths, one per Legendre degree: ``widths`` with its last value
+    repeated (or cut) to length ``n``."""
+    return tuple(float(widths[min(k, len(widths) - 1)]) for k in range(n))
 
 
 def _opacity_wave_range(obs_wave) -> Tuple[float, float]:
@@ -232,6 +243,8 @@ def setup_model(fit_config: FitConfig, obs_wave, *,
         order_ref_wave=jnp.asarray(meta.order_ref_wave),
         model_wave_off=jnp.asarray(meta.model_wave_off),
         obs_wave_off=jnp.asarray(meta.obs_wave_off),
+        order_norm_center=jnp.asarray(meta.order_norm_center),
+        order_norm_half=jnp.asarray(meta.order_norm_half),
         temp_chol_L=temp_chol_L,
         h2o_chol_L=h2o_chol_L,
         cont_bspline_matrix=jnp.array(cont_bspline_matrix),
@@ -252,6 +265,12 @@ def setup_model(fit_config: FitConfig, obs_wave, *,
         n_resolution_coeffs=int(fc.n_resolution_coeffs),
         n_wave_coeffs=int(fc.n_wave_coeffs),
         resolution_init=float(fc.resolution),
+        wave_prior_pix=_per_degree(fc.wave_prior_pix, fc.n_wave_coeffs),
+        wave_drift_prior_pix=float(fc.wave_drift_prior_pix),
+        resolution_prior=_per_degree(fc.resolution_prior, fc.n_resolution_coeffs),
+        resolution_drift_prior=float(fc.resolution_drift_prior),
+        continuum_scale_prior=float(fc.continuum_scale_prior),
+        instrument_bound_sigmas=float(fc.instrument_bound_sigmas),
         lsf_profile=fc.lsf_profile.lower(),
         lsf_voigt_gamma_ratio=float(fc.lsf_voigt_gamma_ratio),
         stellar_enabled=bool(fc.stellar_enabled),

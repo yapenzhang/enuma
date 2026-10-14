@@ -19,7 +19,14 @@ from astropy.io import fits
 from scipy.interpolate import interp1d
 from scipy.ndimage import gaussian_filter
 
-from enuma.model.forward import expand_tp_profiles, forward_model, telluric_only
+from enuma.model.forward import (
+    continuum_model,
+    expand_tp_profiles,
+    forward_model,
+    log_resolution,
+    telluric_only,
+    wave_shift_pix,
+)
 from enuma.state import ModelConfig, ModelContext, ModelParameters
 
 __all__ = [
@@ -102,7 +109,8 @@ def plot_fit_results(
 
     _set_plot_style()
 
-    _plot_spectrum_figure(optimized_params, context, wave_nm, obs_flux_np, flux_opt,
+    continuum_all = np.asarray(continuum_model(optimized_params, context, config))
+    _plot_spectrum_figure(continuum_all, wave_nm, obs_flux_np, flux_opt,
                           flux_tell, obs_mask_np, model_m, output_path)
 
     if profile_output_path is None:
@@ -110,7 +118,7 @@ def plot_fit_results(
     _plot_profile_figure(optimized_params, context, fit_species, profile_output_path)
 
 
-def _plot_spectrum_figure(optimized_params, context, wave_nm, obs_flux_np, flux_opt,
+def _plot_spectrum_figure(continuum_all, wave_nm, obs_flux_np, flux_opt,
                           flux_telluric, obs_mask_np, model_m, output_path):
     """Multi-row spectrum + residual panels (3 orders per row).
 
@@ -159,7 +167,7 @@ def _plot_spectrum_figure(optimized_params, context, wave_nm, obs_flux_np, flux_
                 residuals = np.where(obs_mask_np[i], residuals, np.nan)
             rx.plot(wave_nm[i], residuals, 'C1-', alpha=0.8, linewidth=1)
 
-            continuum = jnp.dot(context.cont_bspline_matrix, optimized_params.continuum_coeffs[i])
+            continuum = continuum_all[i]
             fx.plot(wave_nm[i], continuum, 'C2:', label=lab_cont, alpha=0.8, linewidth=1)
 
             if model_m is not None:
@@ -278,10 +286,7 @@ def plot_residuals_diagnostic(
     with np.errstate(divide="ignore", invalid="ignore"):
         residuals = obs_np / model_flux - 1.0
     if flux_cmp is not None:
-        continuum = jnp.stack([
-            jnp.dot(context.cont_bspline_matrix, optimized_params.continuum_coeffs[i])
-            for i in range(obs_np.shape[0])
-        ])
+        continuum = np.asarray(continuum_model(optimized_params, context, config))
         residuals_cmp = obs_np / flux_cmp / continuum - 1.0
         residuals_cmp -= np.nanmedian(residuals_cmp, axis=1, keepdims=True)
     else:
@@ -346,35 +351,37 @@ def plot_instrument_diagnostics(
     config: ModelConfig,
     output_path: str = "instrument_diagnostics.png",
 ):
-    """Plot the fitted spectral resolution R(λ) and wavelength shift per order."""
+    """Plot the fitted spectral resolution R(λ) and wavelength shift per order (one
+    exposure; for a night, the static terms). Dashed lines mark the bounds of the
+    R level and of the mean shift."""
     n_orders = context.obs_wave.shape[0]
     n_pixels_obs = context.obs_wave.shape[1]
 
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 8), sharex=True)
 
     pixels = np.arange(n_pixels_obs)
-    x_pix_model = np.linspace(-1.0, 1.0, config.order_size)
     model_wave_np = jax.device_get(context.model_wave)
     obs_wave_np = jax.device_get(context.obs_wave)
     order_start_idx = jax.device_get(context.order_start_idx)
+    pixel_shift = np.asarray(wave_shift_pix(optimized_params, context, config))   # (O, P)
+    R_model = np.exp(np.asarray(log_resolution(optimized_params, context, config)))
 
     for i in range(n_orders):
-        # Wavelength shift: w_coeffs are already in pixel units (see
-        # model.process_order), so the polynomial on obs_wave_norm is the shift.
-        obs_wn = jax.device_get(context.obs_wave_norm[i])
-        w_coeffs = jax.device_get(optimized_params.wave_coeffs[i])
-        pixel_shift = np.polyval(w_coeffs, obs_wn)
-
         # Spectral resolution R, mapped from the model grid onto observed pixels.
-        r_coeffs = jax.device_get(optimized_params.resolution_coeffs[i])
-        R_model = 1e5 * np.exp(np.polyval(r_coeffs, x_pix_model))   # log-space R(λ)
         start_idx = int(order_start_idx[i])
         m_wave = model_wave_np[start_idx: start_idx + config.order_size]
-        R_obs = np.interp(obs_wave_np[i], m_wave, R_model)
+        R_obs = np.interp(obs_wave_np[i], m_wave, R_model[i])
 
         color = plt.cm.viridis(i / max(1, n_orders - 1))
         ax1.plot(pixels, R_obs, color=color, alpha=0.8, label=f"Order {i}")
-        ax2.plot(pixels, pixel_shift, color=color, alpha=0.8)
+        ax2.plot(pixels, pixel_shift[i], color=color, alpha=0.8)
+
+    c = config.instrument_bound_sigmas
+    r0 = 1e5 * config.resolution_init
+    for bound in (np.exp(-c * config.resolution_prior[0]), np.exp(c * config.resolution_prior[0])):
+        ax1.axhline(r0 * bound, color="0.4", ls="--", lw=0.8)
+    for bound in (-c * config.wave_prior_pix[0], c * config.wave_prior_pix[0]):
+        ax2.axhline(bound, color="0.4", ls="--", lw=0.8)
 
     ax1.set_ylabel("Spectral Resolution ($R$)")
     ax1.set_title("Fitted Spectral Resolution per Order")

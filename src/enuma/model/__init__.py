@@ -11,10 +11,14 @@ from enuma.model.forward import (
     LSF_PROFILE_CHOICES,
     apply_custom_lsf,
     apply_variable_lsf,
+    continuum_model,
     forward_model,
     forward_model_batched,
     get_layer_properties,
+    instrument_terms,
+    log_resolution,
     telluric_only,
+    wave_shift_pix,
 )
 from enuma.model.opacity import OpacityGridInfo, get_opacities, load_pyrox_opacity
 from enuma.model.profile import (
@@ -44,6 +48,10 @@ __all__ = [
     "forward_model_batched",
     "get_layer_properties",
     "telluric_only",
+    "instrument_terms",
+    "wave_shift_pix",
+    "log_resolution",
+    "continuum_model",
     "LSF_PROFILE_CHOICES",
     "apply_custom_lsf",
     "apply_variable_lsf",

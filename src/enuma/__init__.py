@@ -27,6 +27,7 @@ from enuma.inference.fit import (
     fit_spectrum,
     fit_timeseries,
 )
+from enuma.inference.stellar_em import MultiNightResult, fit_nights
 from enuma.model.forward import forward_model, forward_model_batched
 from enuma.io.results import (
     generate_best_fit_spectrum,
@@ -39,6 +40,7 @@ from enuma.plotting import (
     plot_instrument_diagnostics,
     plot_loss_history,
     plot_residuals_diagnostic,
+    plot_stellar_diagnostics,
     plot_timeseries_diagnostics,
     plot_timeseries_residuals,
     plot_timeseries_parameters,
@@ -61,6 +63,8 @@ __all__ = [
     "FitResult",
     "fit_spectrum",
     "fit_timeseries",
+    "fit_nights",
+    "MultiNightResult",
     "save_best_fit_params_json",
     "load_best_fit_params_json",
     "save_best_fit_spectrum_txt",
@@ -88,4 +92,5 @@ __all__ = [
     "plot_timeseries_profiles",
     "plot_timeseries_parameters",
     "plot_timeseries_diagnostics",
+    "plot_stellar_diagnostics",
 ]
