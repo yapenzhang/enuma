@@ -77,7 +77,7 @@ Some features download data on first use and cache it locally:
 
 * the date- and site-specific GDAS atmospheric profile
   (``reference_profile_source="gdas"``), fetched from NOAA's public AWS mirror,
-  which covers mid-2021 onward;
+  which covers 2017 onward (with some missing days);
 * the PHOENIX-NewEra stellar template (``stellar_enabled=True``).
 
 Both require internet access the first time. Files are cached in

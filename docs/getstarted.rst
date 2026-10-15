@@ -183,7 +183,10 @@ reference temperature, pressure and water-vapour profiles come from:
     The NOAA GDAS analysis column nearest to the observation: the closest
     6-hourly cycle and 0.25° grid cell. It is fetched automatically from the
     observation MJD and the observatory, and cached (see :ref:`data`). Data are
-    available from mid-2021. To use a column you already have, pass it with
+    available from 2017, with some missing days. Before the GFS v16 upgrade
+    (2021-03-22) the column stops at 1 hPa and humidity is derived from relative
+    humidity; from then on it reaches 0.01 hPa. Above the top GDAS level, T, P,
+    H2O and O3 switch to MIPAS. To use a column you already have, pass it with
     :attr:`~enuma.config.FitConfig.reference_profile_nc_path`. Recommended when
     the date is covered.
 

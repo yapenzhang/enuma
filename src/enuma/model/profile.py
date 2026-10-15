@@ -42,7 +42,7 @@ REFERENCE_PROFILE_CHOICES = ("mipas", "gdas")
 
 
 # ---------------------------------------------------------------------------
-# GDAS fetch + cache (public AWS mirror noaa-gfs-bdp-pds; mid-2021 onward)
+# GDAS fetch + cache (public AWS mirror noaa-gfs-bdp-pds; 2017 onward)
 # ---------------------------------------------------------------------------
 
 def fetch_gdas_profile(mjd: float, lat: float, lon: float,
@@ -86,43 +86,114 @@ def fetch_gdas_profile(mjd: float, lat: float, lon: float,
     return str(out_path)
 
 
+# Bucket layout of the 0.25° analysis per GFS era, newest first. The prefix
+# changed with the v14 (2017-07) and v16 (2021-03) upgrades.
+_GDAS_KEY_TEMPLATES = (
+    "gdas.{c:%Y%m%d}/{c:%H}/atmos/gdas.t{c:%H}z.pgrb2.0p25.f000",   # GFS v16+
+    "gdas.{c:%Y%m%d}/{c:%H}/gdas.t{c:%H}z.pgrb2.0p25.f000",         # GFS v14-v15
+    "gdas.{c:%Y%m%d}/{c:%H}/gdas1.t{c:%H}z.pgrb2.0p25.f000",        # GFS v13
+)
+_GDAS_BUCKET = "noaa-gfs-bdp-pds"
+
+
 def _download_gdas_grib(local_path: str, cycle: dt.datetime) -> None:
     """Download a cycle's GDAS GRIB2 analysis from the public AWS mirror."""
     try:
         import s3fs
     except ImportError:
         raise ImportError("s3fs is required to fetch GDAS analyses. Install with: pip install s3fs")
-    src = (f"noaa-gfs-bdp-pds/gdas.{cycle:%Y%m%d}/{cycle:%H}/atmos/"
-           f"gdas.t{cycle:%H}z.pgrb2.0p25.f000")
     fs = s3fs.S3FileSystem(anon=True)
-    if not fs.exists(src):
-        raise FileNotFoundError(f"GDAS data not found on s3://{src} (mirror covers mid-2021 onward).")
+    tried = [f"{_GDAS_BUCKET}/{t.format(c=cycle)}" for t in _GDAS_KEY_TEMPLATES]
+    src = next((k for k in tried if fs.exists(k)), None)
+    if src is None:
+        raise FileNotFoundError(
+            f"No GDAS 0.25° analysis for cycle {cycle:%Y-%m-%d %H} UTC on the AWS mirror "
+            f"(covers 2017 onward, with gaps). Tried: " + ", ".join(f"s3://{k}" for k in tried))
     logger.info("Downloading s3://%s ...", src)
     fs.get(src, local_path)
     logger.info("  → %s  (%.1f MB)", local_path, os.path.getsize(local_path) / 1e6)
 
 
+def _q_from_rh(rh_pct, t_k, p_hpa):
+    """Specific humidity (kg/kg) from GFS relative humidity (%).
+
+    NCEP's post-processor takes saturation over water above 0 °C, over ice below
+    -20 °C, and a linear blend in between (Buck 1981 fits used here). Against
+    files carrying both fields this reproduces SPFH to ~0.2 % (median) in the
+    troposphere. RH is stored to 0.001 %, too coarse to resolve a few ppmv of
+    water above ~10 hPa, so q is held at its 10 hPa value there, and floored
+    at 1e-6 kg/kg (~1.6 ppmv) where RH rounds to zero.
+    """
+    es_water = 611.21 * np.exp(17.502 * (t_k - 273.16) / (t_k - 32.19))  # Pa
+    es_ice = 611.21 * np.exp(22.587 * (t_k - 273.16) / (t_k + 0.7))      # Pa
+    w = np.clip((t_k - 253.16) / 20.0, 0.0, 1.0)
+    e = rh_pct / 100.0 * (w * es_water + (1.0 - w) * es_ice)
+    eps = M_H2O / M_DRY_AIR
+    q = eps * e / (p_hpa * 100.0 - (1.0 - eps) * e)
+    upper = p_hpa < 10.0
+    if upper.any() and not upper.all():
+        q = np.where(upper, q[~upper][np.argmin(p_hpa[~upper])], q)
+    return np.maximum(q, 1e-6)
+
+
 def _extract_gdas_column(grib_path: str, lat: float, lon: float):
-    """Stitch isobaricInhPa (33 levels) + isobaricInPa (8 levels) and select the
-    column nearest the telescope. Returns the merged xarray Dataset."""
+    """Select the column nearest the telescope as an xarray Dataset of t, q, gh,
+    o3mr (+ u, v) on descending ``isobaricInhPa``.
+
+    Each variable is read on its own because the level sets differ between
+    variables and eras: v16+ files add 8 sub-hPa ``isobaricInPa`` levels, while
+    pre-v16 files stop at 1 hPa, give ozone only from 400 hPa up, and carry RH
+    instead of q (converted with :func:`_q_from_rh`). The column keeps the levels
+    where T, gh, and humidity all exist; o3mr/u/v are interpolated onto them in
+    log p (held constant beyond their own range).
+    """
     try:
         import xarray as xr
     except ImportError:
         raise ImportError("xarray + cfgrib are required to read GDAS GRIB2 files. "
                           "Install with: pip install xarray cfgrib")
 
-    def _open(filter_keys):
-        return xr.open_dataset(grib_path, engine="cfgrib",
-                               backend_kwargs={"filter_by_keys": filter_keys})
+    def _read(short_name):
+        """Return (p_hPa, values) for one variable over both level types, or None."""
+        p, vals = [], []
+        for level_type, to_hpa in (("isobaricInhPa", 1.0), ("isobaricInPa", 0.01)):
+            ds = xr.open_dataset(grib_path, engine="cfgrib", backend_kwargs={
+                "filter_by_keys": {"typeOfLevel": level_type, "shortName": short_name}})
+            if short_name not in ds.data_vars:
+                continue
+            col = ds[short_name].sel(latitude=lat, longitude=lon % 360.0, method="nearest")
+            p.append(np.atleast_1d(col[level_type].values) * to_hpa)
+            vals.append(np.atleast_1d(col.values))
+        if not p:
+            return None
+        p, vals = np.concatenate(p), np.concatenate(vals)
+        order = np.argsort(p)[::-1]
+        return p[order], vals[order].astype(float)
 
-    ds_hPa = _open({"typeOfLevel": "isobaricInhPa", "shortName": ["t", "q", "gh", "o3mr", "u", "v"]})
-    ds_Pa = _open({"typeOfLevel": "isobaricInPa", "shortName": ["t", "q", "gh", "o3mr", "u", "v"]})
-    ds_Pa = (ds_Pa.assign_coords(isobaricInPa=ds_Pa["isobaricInPa"] / 100.0)
-                  .rename({"isobaricInPa": "isobaricInhPa"}))
+    fields = {name: _read(name) for name in ("t", "gh", "q", "r", "o3mr", "u", "v")}
+    humidity = "q" if fields["q"] is not None else "r"
+    for name in ("t", "gh", humidity, "o3mr"):
+        if fields[name] is None:
+            raise ValueError(f"GDAS file {grib_path} has no '{name}' on isobaric levels.")
 
-    pres = (xr.concat([ds_hPa, ds_Pa], dim="isobaricInhPa")
-              .sortby("isobaricInhPa", ascending=False))
-    return pres.sel(latitude=lat, longitude=lon % 360.0, method="nearest")
+    # Common levels of T, gh and humidity (descending pressure).
+    p = fields["t"][0]
+    for name in ("gh", humidity):
+        p = p[np.isin(p, fields[name][0])]
+
+    def _on_levels(name):
+        # Exact on shared levels; np.interp wants ascending x, so flip.
+        src_p, src_v = fields[name]
+        return np.interp(np.log(p)[::-1], np.log(src_p)[::-1], src_v[::-1])[::-1]
+
+    t = _on_levels("t")
+    q = _on_levels("q") if humidity == "q" else _q_from_rh(_on_levels("r"), t, p)
+    data = {"t": t, "q": q, "gh": _on_levels("gh"), "o3mr": _on_levels("o3mr")}
+    if fields["u"] is not None and fields["v"] is not None:
+        data["u"], data["v"] = _on_levels("u"), _on_levels("v")
+
+    return xr.Dataset({k: ("isobaricInhPa", v) for k, v in data.items()},
+                      coords={"isobaricInhPa": p})
 
 
 def _load_gdas_profile(path):
@@ -239,6 +310,9 @@ def get_standard_atmosphere(
 
     * ``"mipas"`` (default): T, P, H2O from the same .atm file (no extra files).
     * ``"gdas"``: override T, P, H2O, O3 with the GDAS column at ``profile_nc_path``.
+      Above the column's top level (1 hPa, ~48 km, before the 2021 GFS v16
+      upgrade) T, H2O, and O3 switch to MIPAS, and P follows the MIPAS profile
+      rescaled to match GDAS at that level so it stays continuous.
 
     ``winds`` is the (u, v) m/s horizontal wind on ``z_grid`` for ``"gdas"`` (when
     the column carries winds), else None.
@@ -268,17 +342,26 @@ def get_standard_atmosphere(
     xp_obs = z_obs_km * 1e5                          # km → cm
     log_p_obs_ba = jnp.log10(p_obs_hpa * 1e3)        # hPa → Ba (log space)
 
-    tp = jnp.interp(z_grid, xp_obs, t_obs)
-    p_ref = 10.0 ** jnp.interp(z_grid, xp_obs, log_p_obs_ba)
+    # Above the GDAS top, switch to MIPAS (P rescaled to be continuous there).
+    above = z_grid > xp_obs[-1]
+    log_p_mipas = jnp.log10(mipas_press)
+    log_p_offset = log_p_obs_ba[-1] - jnp.interp(xp_obs[-1], mipas_height, log_p_mipas)
+
+    tp = jnp.where(above, jnp.interp(z_grid, mipas_height, mipas_temp),
+                   jnp.interp(z_grid, xp_obs, t_obs))
+    p_ref = 10.0 ** jnp.where(above, jnp.interp(z_grid, mipas_height, log_p_mipas) + log_p_offset,
+                              jnp.interp(z_grid, xp_obs, log_p_obs_ba))
 
     vmr_dict = {}
     for species in species_list:
+        log_vmr_mipas = jnp.interp(z_grid, mipas_height, mipas_vmr_log[species])
         if species == "h2o":
-            vmr_dict[species] = 10.0 ** jnp.interp(z_grid, xp_obs, np.log10(vmr_h2o_obs))
+            log_vmr = jnp.where(above, log_vmr_mipas, jnp.interp(z_grid, xp_obs, np.log10(vmr_h2o_obs)))
         elif species == "o3":
-            vmr_dict[species] = 10.0 ** jnp.interp(z_grid, xp_obs, np.log10(vmr_o3_obs))
+            log_vmr = jnp.where(above, log_vmr_mipas, jnp.interp(z_grid, xp_obs, np.log10(vmr_o3_obs)))
         else:
-            vmr_dict[species] = 10.0 ** jnp.interp(z_grid, mipas_height, mipas_vmr_log[species])
+            log_vmr = log_vmr_mipas
+        vmr_dict[species] = 10.0 ** log_vmr
 
     winds = None
     if u_obs is not None and v_obs is not None:

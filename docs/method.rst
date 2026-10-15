@@ -41,7 +41,8 @@ Each layer starts from a *reference* temperature, pressure and volume mixing
 ratio (VMR) per species (see :ref:`reference-atmosphere`):
 
 * temperature, pressure and H2O come from the MIPAS climatology or the GDAS
-  analysis for the night and site;
+  analysis for the night and site; above the top GDAS level the profile
+  switches to MIPAS, with the MIPAS pressure rescaled to match at that level;
 * the dry species always start from MIPAS;
 * the H2O profile is optionally rescaled to a measured precipitable water vapour.
 
