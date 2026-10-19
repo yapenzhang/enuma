@@ -138,7 +138,9 @@ class FitConfig:
     #: from ``data["airmass"]`` (the header), else 1.0 with a warning.
     airmass: Optional[float] = None
     #: Precipitable water vapour (mm) used to rescale the reference H2O profile at
-    #: setup. Falls back to the header PWV / IWV; ``None`` skips the scaling.
+    #: setup. Falls back to the header PWV / IWV. Without either, the header
+    #: relative humidity at the site (``data["rh_pct"]``) sets the scaling, and
+    #: with none of them the reference H2O is used unscaled.
     pwv_mm: Optional[float] = None
 
     # ---- Instrument LSF ----

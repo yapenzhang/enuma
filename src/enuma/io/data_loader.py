@@ -57,6 +57,14 @@ def _read_header_pwv_mm(header) -> Optional[float]:
     return _header_float(header, "PWV", "IWV")
 
 
+def _read_header_ambient(header) -> Tuple[Optional[float], Optional[float]]:
+    """(relative humidity in %, air temperature in K) at the site from the ESO
+    ``TEL AMBI RHUM`` and ``TEL AMBI TEMP`` (deg C) cards; None where absent."""
+    rh_pct = _header_float(header, "HIERARCH ESO TEL AMBI RHUM")
+    temp_c = _header_float(header, "HIERARCH ESO TEL AMBI TEMP")
+    return rh_pct, (temp_c + 273.15 if temp_c is not None else None)
+
+
 def _read_header_target_radec(header) -> Tuple[Optional[float], Optional[float]]:
     """(target_ra_deg, target_dec_deg) in ICRS degrees from the ``RA``/``DEC``
     cards, or ``(None, None)``.
@@ -138,8 +146,8 @@ def load_fits_spectra(
     Returns:
         Dict of sanitised arrays — ``wave`` ``(O, P)``, ``flux``/``err``/``mask``
         ``(O, P)`` for one exposure or ``(N, O, P)`` for a night — plus observation
-        metadata (``airmass``/``mjd`` scalar or ``(N,)``, ``pwv_mm``, ``target_ra``,
-        ``target_dec``; None when absent).
+        metadata (``airmass``/``mjd`` scalar or ``(N,)``, ``pwv_mm``, ``rh_pct``,
+        ``ambient_temp_k``, ``target_ra``, ``target_dec``; None when absent).
     """
     with fits.open(file_path) as hdul:
         header = hdul[0].header
@@ -150,8 +158,10 @@ def load_fits_spectra(
         except (IndexError, KeyError):
             raw_err = np.ones_like(raw_flux)                           # uniform noise
         target_ra, target_dec = _read_header_target_radec(header)
+        rh_pct, ambient_temp_k = _read_header_ambient(header)
         extra = {"target_ra": target_ra, "target_dec": target_dec,
-                 "pwv_mm": _read_header_pwv_mm(header)}
+                 "pwv_mm": _read_header_pwv_mm(header),
+                 "rh_pct": rh_pct, "ambient_temp_k": ambient_temp_k}
         series = raw_flux.ndim == 3
         if series:    # per-exposure airmass/MJD live in their own extensions
             airmass = np.asarray(hdul[ext_airmass].data, dtype=np.float64)   # (N,)

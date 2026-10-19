@@ -94,6 +94,11 @@ exposures.
      - optional
      - optional
      - Target ICRS coordinates (deg) and onsite precipitable water vapour (mm).
+   * - ``rh_pct``, ``ambient_temp_k``
+     - optional
+     - optional
+     - Onsite relative humidity (%) and air temperature (K). They scale the
+       reference H2O when ``pwv_mm`` is absent.
 
 Loading spectra
 ---------------
@@ -105,8 +110,10 @@ Two loaders produce this dict:
   ``ext_wave``). A 2-D ``FLUX`` gives a single exposure; a 3-D ``FLUX`` gives a
   time series, with per-exposure ``MJD`` and ``AIRMASS`` extensions. Metadata
   comes from the primary header: airmass (``AIRMASS``, or the mean of the ESO
-  ``TEL AIRM START/END`` cards), ``MJD-OBS``, ``RA``/``DEC``, and PWV (the ESO
-  ``TEL AMBI IWV START/END`` cards, or ``PWV``/``IWV``).
+  ``TEL AIRM START/END`` cards), ``MJD-OBS``, ``RA``/``DEC``, PWV (the ESO
+  ``TEL AMBI IWV START/END`` cards, or ``PWV``/``IWV``), and the onsite relative
+  humidity and air temperature (the ESO ``TEL AMBI RHUM`` and ``TEL AMBI TEMP``
+  cards).
 * :func:`~enuma.io.data_loader.load_h5_spectra` reads one night from an HDF5 file with datasets
   ``flux`` ``(N, O, P)``, ``err`` (optional), ``wave`` ``(O, P)``, ``airmass``
   ``(N,)`` and the optional ``baryrv``, ``mjd`` and ``phase`` ``(N,)``.
@@ -196,6 +203,14 @@ median MJD of the night selects the GDAS column.
 
 If the header or :attr:`~enuma.config.FitConfig.pwv_mm` provides the precipitable
 water vapour, the reference H2O profile is rescaled to match it before the fit.
+Without a PWV, the relative humidity measured at the site is used instead when
+the header has it: the profile is rescaled so its water vapour pressure at the
+site altitude matches that humidity at the measured air temperature (or at the
+reference temperature, if the header has none). A surface reading only sets the
+amount of water near the ground; the shape of the profile above still comes from
+the reference. This works best with ``"gdas"``, whose profile is specific to the
+night, while the climatological MIPAS shape can leave the column off by a factor
+of about two.
 
 With the GDAS source you can also set
 :attr:`~enuma.config.FitConfig.wind_enabled` ``=True`` in :class:`~enuma.config.FitConfig`. Each layer's absorption is

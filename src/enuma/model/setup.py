@@ -171,7 +171,8 @@ def _load_lsf_kernel(path: str, model_dv_kms: float) -> jnp.ndarray:
 
 def setup_model(fit_config: FitConfig, obs_wave, *,
                 airmass, location: Optional[SiteLocation] = None,
-                pwv_mm: Optional[float] = None, obs_mjd=None,
+                pwv_mm: Optional[float] = None, rh_pct: Optional[float] = None,
+                ambient_temp_k: Optional[float] = None, obs_mjd=None,
                 opacities: Optional[Tuple[dict, np.ndarray]] = None,
                 ) -> Tuple[ModelContext, ModelConfig]:
     """Build the (context, config) pair consumed by ``forward_model``."""
@@ -203,7 +204,8 @@ def setup_model(fit_config: FitConfig, obs_wave, *,
     z_boundaries, z_centers = build_altitude_grid(fc, location.alt_m)
     t_ref_centers, p_ref_centers, p_ref_boundaries, vmr_ref_centers, winds = build_reference_atmosphere(
         fc, z_centers, z_boundaries, fc.cache_dir,
-        obs_mjd=obs_mjd, location=location, pwv_mm=pwv_mm)
+        obs_mjd=obs_mjd, location=location, pwv_mm=pwv_mm,
+        rh_pct=rh_pct, ambient_temp_k=ambient_temp_k)
     temp_chol_L, h2o_chol_L = build_gp_factors(fc, z_centers)
 
     # Model grid velocity step (the opacity grid is uniform in velocity) and the
@@ -379,7 +381,9 @@ def _resolve_pwv_mm(fit_config: FitConfig, data: dict) -> Optional[float]:
         return float(fit_config.pwv_mm)
     if data.get("pwv_mm") is not None:
         return float(data["pwv_mm"])
-    logger.warning("No PWV in header and FitConfig.pwv_mm is None; skipping H2O scaling.")
+    if data.get("rh_pct") is None:
+        logger.warning("No PWV or relative humidity in header and FitConfig.pwv_mm is None; "
+                       "skipping H2O scaling.")
     return None
 
 
@@ -427,6 +431,7 @@ def build_context(data: dict, fit_config: FitConfig,
     if obs_mjd is not None and np.ndim(obs_mjd) > 0:
         obs_mjd = float(np.median(obs_mjd))
     obs_kw = dict(location=location, pwv_mm=_resolve_pwv_mm(fit_config, data),
+                  rh_pct=data.get("rh_pct"), ambient_temp_k=data.get("ambient_temp_k"),
                   obs_mjd=obs_mjd, opacities=opacities)
     
     # single-exposure

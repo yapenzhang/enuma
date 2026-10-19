@@ -231,7 +231,36 @@ Current limitations
   starting columns help. Re-solving the template while the tellurics move would
   remove the effect; that is the planned next step.
 * All nights must share the instrument setting, and orders that overlap in
-  wavelength are not supported yet.
+  wavelength need the overlap masked in one of them (below).
+
+
+Overlapping orders
+******************
+
+Every order has its own row of template nodes, so two orders cannot both have
+unmasked pixels at one wavelength. Orders that overlap, as in most echelle
+spectrographs, or that lie closer together than about the LSF window, are masked
+apart before the fit:
+
+.. code-block:: python
+
+    from enuma import mask_order_overlaps
+
+    night = mask_order_overlaps(night, fc)        # or a list of nights for fit_nights
+    res = fit_timeseries(night, fc)
+
+For each pair of neighbouring orders that are too close,
+:func:`~enuma.inference.stellar_em.mask_order_overlaps` masks the overlap in the
+order with less S/N there. If the two orders' unmasked pixels are still too close,
+it then masks a few more pixels on whichever side carries less S/N. The gap it
+leaves has room on each side for half a probe window plus the largest wavelength
+shift the fit allows, and it is widened by the spread of the barycentric
+velocities so that it holds in the stellar rest frame. With the default
+``lsf_kernel_width`` and 2 km/s pixels (IGRINS) it is about 56 km/s.
+
+The masked pixels drop out of the whole fit, tellurics included, and each masking
+is logged. Order pairs that are far enough apart are left alone and keep exactly
+the nodes they had before.
 
 
 Options

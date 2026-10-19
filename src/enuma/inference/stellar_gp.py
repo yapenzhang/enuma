@@ -143,10 +143,60 @@ def _round_up(x: float, multiple: int) -> int:
     return int(multiple * math.ceil(x / multiple))
 
 
+def _probe_sizes(dlnlam: float, obs_waves: Sequence[np.ndarray], node_kms: float,
+                 lsf_kernel_width: int):
+    """``(stride, pix_samples, block)``: model samples per node, the widest pixel in
+    model samples, and the block size (= probe colors) for nodes ``node_kms`` apart
+    on a lattice of step ``dlnlam``."""
+    stride = max(1, int(round(node_kms / (dlnlam * C_KMS))))
+    pix_samples = max(float(np.max(np.diff(np.log(np.asarray(w, np.float64)), axis=1)))
+                      for w in obs_waves) / dlnlam
+    support = lsf_kernel_width + math.ceil(pix_samples) + 4     # samples a pixel sees
+    row_nodes = math.ceil(support / stride) + 2
+    return stride, pix_samples, _round_up(row_nodes + 4, 8)
+
+
+def _split_room(block: int) -> int:
+    """Nodes a split between two orders must leave beyond each one's outermost pixel:
+    half a probe window, plus 2."""
+    return block // 2 + 2
+
+
+def _rest_extents(obs_waves, velocities, lnlam0: float, h_ln: float, valid=None):
+    """``(t_min, t_max)``, each ``(O,)``: every order's rest-frame pixel span over
+    every night and exposure, in node units from ``lnlam0``. With ``valid`` (per
+    night, ``(O, P)`` or ``(N, O, P)``), the span of the valid pixels, ``±inf`` for
+    an order with none."""
+    t_min = t_max = None
+    for i, (w, v) in enumerate(zip(obs_waves, velocities)):
+        lnw = np.log(np.asarray(w, np.float64))                    # (O, P)
+        u = np.log1p(np.asarray(v, np.float64) / C_KMS)            # (N,)
+        lo_w, hi_w = lnw, lnw
+        if valid is not None:
+            ok = np.asarray(valid[i], bool).reshape((-1,) + lnw.shape).any(axis=0)
+            lo_w, hi_w = np.where(ok, lnw, np.inf), np.where(ok, lnw, -np.inf)
+        lo = (lo_w.min(axis=1) - u.max() - lnlam0) / h_ln
+        hi = (hi_w.max(axis=1) - u.min() - lnlam0) / h_ln
+        t_min = lo if t_min is None else np.minimum(t_min, lo)
+        t_max = hi if t_max is None else np.maximum(t_max, hi)
+    return t_min, t_max
+
+
+def _apart(hi: float, lo: float, margin: int, room: int) -> bool:
+    """Whether two orders whose pixels end at ``hi`` and start at ``lo`` (node units)
+    can each have their own nodes: their margins don't meet, or the midpoint leaves
+    ``room`` nodes on both sides."""
+    if np.ceil(hi) + margin < np.floor(lo) - margin:
+        return True
+    mid = np.floor(0.5 * (hi + lo))
+    return mid - hi >= room and lo - mid >= room
+
+
 def build_stellar_grid(model_waves: Sequence[np.ndarray], obs_waves: Sequence[np.ndarray],
                        velocities: Sequence[np.ndarray], *, node_kms: float,
                        lsf_kernel_width: int,
-                       wave_shift_pix: float = _WAVE_SHIFT_MARGIN_PIX) -> StellarGrid:
+                       wave_shift_pix: float = _WAVE_SHIFT_MARGIN_PIX,
+                       obs_valid: Optional[Sequence[np.ndarray]] = None) -> StellarGrid:
     """Size the rest-frame node grid for one or several nights of the same setting.
 
     Args:
@@ -159,6 +209,12 @@ def build_stellar_grid(model_waves: Sequence[np.ndarray], obs_waves: Sequence[np
         lsf_kernel_width: LSF kernel extent in model samples (sets the colors).
         wave_shift_pix: largest wavelength-solution shift (pixels) the node ranges
             must absorb on top of the observed span.
+        obs_valid: optional, per night, the valid pixels (``(O, P)``, or the
+            ``(N, O, P)`` mask; valid in any exposure counts). Two orders whose pixels
+            lie too close for each to have its own nodes, such as overlapping orders,
+            are then split between their valid pixels instead, so masking the overlap
+            in one of them separates them (:func:`~enuma.inference.stellar_em.mask_order_overlaps`).
+            Other order edges keep their full pixel span.
     """
     mw0 = np.asarray(model_waves[0], np.float64)
     lnlam0 = float(np.log(mw0[0]))
@@ -168,44 +224,55 @@ def build_stellar_grid(model_waves: Sequence[np.ndarray], obs_waves: Sequence[np
         if abs(g - round(g)) > 1e-3:
             raise ValueError("The nights' model grids are not slices of one opacity lattice.")
 
-    stride = max(1, int(round(node_kms / (dlnlam * C_KMS))))
-    h_ln = stride * dlnlam
-
     shapes = {np.shape(w) for w in obs_waves}
     if len(shapes) != 1:
         raise NotImplementedError("All nights must share the instrument setting (same "
                                   f"order/pixel layout); got shapes {sorted(shapes)}.")
 
-    # Widest pixel, in model samples; sets the colors and the node margins.
-    pix_samples = max(float(np.max(np.diff(np.log(np.asarray(w, np.float64)), axis=1)))
-                      for w in obs_waves) / dlnlam
-    support = lsf_kernel_width + math.ceil(pix_samples) + 4     # samples a pixel sees
-    row_nodes = math.ceil(support / stride) + 2
-    block = _round_up(row_nodes + 4, 8)
+    # The widest pixel sets the colors and the node margins.
+    stride, pix_samples, block = _probe_sizes(dlnlam, obs_waves, node_kms, lsf_kernel_width)
+    h_ln = stride * dlnlam
     margin = block // 2 + math.ceil(wave_shift_pix * pix_samples / stride) + 2
+    room = _split_room(block)
 
     # Rest-frame pixel positions over every night and exposure, in node units.
-    t_min, t_max = None, None
-    for w, v in zip(obs_waves, velocities):
-        lnw = np.log(np.asarray(w, np.float64))                    # (O, P)
-        u = np.log1p(np.asarray(v, np.float64) / C_KMS)            # (N,)
-        lo = (lnw.min(axis=1) - u.max() - lnlam0) / h_ln
-        hi = (lnw.max(axis=1) - u.min() - lnlam0) / h_ln
-        t_min = lo if t_min is None else np.minimum(t_min, lo)
-        t_max = hi if t_max is None else np.maximum(t_max, hi)
+    t_min, t_max = _rest_extents(obs_waves, velocities, lnlam0, h_ln)
+    v_min, v_max = t_min, t_max
+    if obs_valid is not None:                   # an order without valid pixels keeps its span
+        v_min, v_max = _rest_extents(obs_waves, velocities, lnlam0, h_ln, obs_valid)
+        v_min = np.where(np.isfinite(v_min), v_min, t_min)
+        v_max = np.where(np.isfinite(v_max), v_max, t_max)
     node_lo = (np.floor(t_min) - margin).astype(np.int64)
     node_hi = (np.ceil(t_max) + margin).astype(np.int64)
 
     # Neighbouring orders (e.g. adjacent detectors) whose margins overlap split the
-    # gap at the midpoint between their pixels: no pixel sees that far.
+    # gap at the midpoint between their pixels: no pixel sees that far. Orders too
+    # close for that, overlapping ones say, split between their valid pixels.
+    h_kms = stride * dlnlam * C_KMS
     order = np.argsort(t_min)
     for a, b in zip(order[:-1], order[1:]):
+        hi, lo = t_max[a], t_min[b]
+        if not _apart(hi, lo, margin, room):
+            hi, lo = v_max[a], v_min[b]
+            if not _apart(hi, lo, margin, room):
+                where = (f"overlap by {(hi - lo) * h_kms:.0f} km/s" if lo < hi
+                         else f"are {(lo - hi) * h_kms:.0f} km/s apart")
+                raise NotImplementedError(
+                    f"Orders {a} and {b} {where} in the stellar rest frame; the learned "
+                    f"template needs about {(2 * room + 2) * h_kms:.0f} km/s between their "
+                    "unmasked pixels. Mask the overlap in one of them, e.g. with "
+                    "enuma.mask_order_overlaps.")
+            node_hi[a] = int(np.ceil(hi)) + margin
+            node_lo[b] = int(np.floor(lo)) - margin
         if node_hi[a] >= node_lo[b]:
-            mid = int(np.floor(0.5 * (t_max[a] + t_min[b])))
-            if mid - t_max[a] < block // 2 + 2 or t_min[b] - mid < block // 2 + 2:
-                raise NotImplementedError("Orders overlapping in wavelength are not "
-                                          "supported by the learned template yet.")
+            mid = int(np.floor(0.5 * (hi + lo)))
             node_hi[a], node_lo[b] = mid - 1, mid
+    by_start = np.argsort(node_lo)
+    clash = np.nonzero(node_hi[by_start[:-1]] >= node_lo[by_start[1:]])[0]
+    if clash.size:
+        a, b = by_start[clash[0]], by_start[clash[0] + 1]
+        raise NotImplementedError(f"The template nodes of orders {a} and {b} overlap: an "
+                                  "order overlapping more than its neighbours is not supported.")
     n_nodes = (node_hi - node_lo + 1).astype(np.int64)
     for mw in model_waves:
         g0 = round((np.log(np.asarray(mw, np.float64)[0]) - lnlam0) / dlnlam)
@@ -229,6 +296,7 @@ class NightGeometry(NamedTuple):
     phi_w: jnp.ndarray            # (M,) weight of the right node
     lam_node0: jnp.ndarray        # (O,) λ (nm) of each order's first node
     ref_minus_node0: jnp.ndarray  # (O,) order reference wavelength − lam_node0 (nm)
+    n_nodes: jnp.ndarray          # (O,) real nodes of each order's row
 
 
 class ProbeSpec(NamedTuple):
@@ -270,6 +338,7 @@ def night_geometry(grid: StellarGrid, model_wave: np.ndarray,
         phi_w=jnp.asarray(np.concatenate(ws), jnp.float32),
         lam_node0=jnp.asarray(lam_node0, jnp.float32),
         ref_minus_node0=jnp.asarray(order_ref - lam_node0, jnp.float32),
+        n_nodes=jnp.asarray(grid.n_nodes, jnp.int32),
     )
 
 
@@ -489,8 +558,9 @@ def normal_equations(params: ModelParameters, ctx: ModelContext, config: ModelCo
     Returns:
         ``(G_band (O, n_pad, colors), b (O, n_pad), chi2, overflow)`` with
         ``G_band[o, i, d] = G[i, i + d]``, ``b = Σ Aᵀ W r`` and ``chi2 = Σ rᵀ W r``
-        at ``beta0``. ``overflow`` flags a pixel window outside its chunk or row,
-        which would invalidate the geometry (callers raise on it).
+        at ``beta0``. ``overflow`` flags an unmasked pixel whose window leaves its
+        order's nodes or its chunk, which would invalidate the geometry (callers
+        raise on it).
     """
     O, P = obs_flux.shape[1:]
     Pc, C, Wn = spec.colors, spec.chunk, spec.window
@@ -536,8 +606,12 @@ def normal_equations(params: ModelParameters, ctx: ModelContext, config: ModelCo
         sc = jnp.pad(s, ((0, 0), (0, pad)), mode="edge").reshape(O, n_chunk, C)
         s0 = sc[..., 0]                                              # (O, n_chunk)
         off = sc - s0[..., None]
-        overflow = (overflow | jnp.any(off < 0) | jnp.any(off > Wn - Pc)
-                    | jnp.any(s0 < 0) | jnp.any(s0 + Wn > spec.n_pad))
+        # Every unmasked pixel's window must lie within its order's nodes and within
+        # its chunk's window. Masked pixels add nothing, so theirs may fall anywhere,
+        # e.g. past a row that ends before a masked overlap.
+        overflow = (overflow
+                    | jnp.any((w > 0) & ((s < 0) | (s + Pc > geom.n_nodes[:, None])))
+                    | jnp.any((wc > 0) & ((off < 0) | (off > Wn - Pc))))
 
         D = jnp.zeros((O, n_chunk, C, Wn), R.dtype).at[
             oi4, ci4, pi4, jnp.clip(off[..., None] + u, 0, Wn - 1)].set(R)
@@ -547,9 +621,12 @@ def normal_equations(params: ModelParameters, ctx: ModelContext, config: ModelCo
         vals = jnp.take_along_axis(Gc, jnp.broadcast_to(take_b, Gc.shape[:2] + take_b.shape),
                                    axis=3)
         vals = jnp.where(in_window, vals, 0.0)                       # Gc[a, a + d]
-        rows = s0[..., None, None] + a_idx                           # (O, n_chunk, Wn, 1)
+        # A chunk's window may reach past its row; those entries are zero. Send them
+        # past the end to be dropped (negative indices would wrap around).
+        in_row = lambda i: jnp.where((i >= 0) & (i < spec.n_pad), i, spec.n_pad)
+        rows = in_row(s0[..., None, None] + a_idx)                   # (O, n_chunk, Wn, 1)
         band = band.at[oi4, rows, d_idx].add(vals, mode="drop")
-        b = b.at[oi4[..., 0], s0[..., None] + jnp.arange(Wn)].add(bc, mode="drop")
+        b = b.at[oi4[..., 0], in_row(s0[..., None] + jnp.arange(Wn))].add(bc, mode="drop")
         return (band, b, chi2, overflow), None
 
     init = (jnp.zeros((O, spec.n_pad, Pc), beta0.dtype), jnp.zeros((O, spec.n_pad), beta0.dtype),

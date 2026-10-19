@@ -13,6 +13,7 @@ __all__ = [
     "OpacityGridInfo",
     "load_pyrox_opacity",
     "get_opacities",
+    "opacity_wave_grid",
 ]
 
 logger = logging.getLogger("enuma.model.opacity")
@@ -116,3 +117,16 @@ def get_opacities(species_list: list, wave_range: tuple,
         opacity_grids[species] = (grid, info)
 
     return opacity_grids, common_wave_grid
+
+
+def opacity_wave_grid(species_list: list, opacity_dir: Optional[str] = None) -> np.ndarray:
+    """The opacity grids' wavelength grid (nm), read from the first species file
+    found without loading its cross-sections."""
+    opac_dir = Path(opacity_dir) if opacity_dir else data_root() / "opacities"
+    for species in species_list:
+        path = opac_dir / f"{species}.hdf5"
+        if path.exists():
+            with h5py.File(path, "r") as f:
+                return np.asarray(f["wave"][:], np.float64) * 1e9      # m -> nm
+    raise FileNotFoundError(f"No opacity grid for {list(species_list)} in {opac_dir}. "
+                            f"Set ${ENV_VAR} or FitConfig.opacity_dir to the data directory.")

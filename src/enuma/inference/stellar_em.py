@@ -17,24 +17,33 @@ round; only the template, θ and the hyperparameters change.
 
 import dataclasses
 import logging
+import math
 import time
-from typing import List, NamedTuple, Optional, Sequence, Tuple
+from typing import List, NamedTuple, Optional, Sequence, Tuple, Union
 
 import jax.numpy as jnp
 import numpy as np
 
 from enuma.config import FitConfig
+from enuma.constants import C_KMS
 from enuma.inference import stellar_gp as sg
 from enuma.inference.fit import FitResult, _fit_full, _optimize, _prepare
 from enuma.inference.sites import partition_sites
 from enuma.model.forward import bounded, legendre_polyval
-from enuma.model.opacity import get_opacities
-from enuma.model.setup import _opacity_wave_range, _slice_opacities
+from enuma.model.opacity import get_opacities, opacity_wave_grid
+from enuma.model.setup import (
+    _earth_location,
+    _opacity_wave_range,
+    _per_coefficient,
+    _slice_opacities,
+    baryrv_kms,
+)
 from enuma.state import sites_to_params
 
 __all__ = [
     "MultiNightResult",
     "fit_nights",
+    "mask_order_overlaps",
 ]
 
 logger = logging.getLogger("enuma.inference.stellar_em")
@@ -138,6 +147,157 @@ def _warn_degeneracies(fit_config: FitConfig, velocities: Sequence[np.ndarray]) 
                        "separation.", v_min)
 
 
+def _barycentric_kms(data: dict, fit_config: FitConfig) -> np.ndarray:
+    """Per-exposure barycentric term (km/s) as the fit will use it: ``data["baryrv"]``,
+    else from the target coordinates and times, else zero."""
+    if data.get("baryrv") is not None:
+        return np.atleast_1d(np.asarray(data["baryrv"], np.float64))
+    if any(data.get(k) is None for k in ("target_ra", "target_dec", "mjd")):
+        return np.zeros(1)
+    n = int(np.size(data["mjd"])) if np.ndim(data["mjd"]) else None
+    return np.atleast_1d(baryrv_kms(data["target_ra"], data["target_dec"], data["mjd"],
+                                    _earth_location(fit_config), n=n))
+
+
+def mask_order_overlaps(datasets: Union[dict, Sequence[dict]],
+                        fit_config: FitConfig = FitConfig(), *,
+                        model_wave: Optional[np.ndarray] = None):
+    """Mask where orders overlap, so the learned template can give each order its own
+    nodes.
+
+    The template keeps one row of nodes per order (:mod:`~enuma.inference.stellar_gp`):
+    two orders cannot both have unmasked pixels at one wavelength, nor closer together
+    than the template needs to split its nodes between them. For every pair of
+    neighbouring orders that close, this masks, in every exposure:
+
+    1. the overlap in the order with less S/N there (``Σ (flux/err)²`` over all
+       exposures and nights);
+    2. then, if the two orders' unmasked pixels are still too close, the last pixels
+       of the bluer order or the first ones of the redder order, whichever carry less
+       S/N.
+
+    The gap the template needs is half a probe window plus the largest wavelength
+    shift the fit allows (the sum of the ``wave_prior_pix`` bounds) on each side,
+    widened by the spread of the barycentric velocities, so that it holds in the
+    stellar rest frame. Order pairs the template separates already are left alone.
+    What is masked is logged.
+
+    Args:
+        datasets: a night dict, or a sequence of them as for :func:`fit_nights`. All
+            nights are masked at the same wavelengths, since they share the template.
+        fit_config: the fit's configuration. Its node spacing, LSF kernel,
+            wavelength-shift bounds, saturation threshold, RV and observatory apply.
+        model_wave: the opacity wavelength grid (nm); read from the opacity files
+            when omitted.
+
+    Returns:
+        Copies of the nights, as one dict or a list like ``datasets``, with the extra
+        pixels masked in ``mask``.
+    """
+    fc = fit_config
+    single = isinstance(datasets, dict)
+    nights = [datasets] if single else list(datasets)
+    lnw = [np.log(np.asarray(d["wave"], np.float64)) for d in nights]
+    if len({w.shape for w in lnw}) != 1:
+        raise NotImplementedError("All nights must share the instrument setting (same "
+                                  f"order/pixel layout); got shapes {sorted({w.shape for w in lnw})}.")
+    O, P = lnw[0].shape
+
+    # Sizes as in sg.build_stellar_grid; the gap leaves room for the bounded shift too.
+    if model_wave is None:
+        model_wave = opacity_wave_grid(fc.species, fc.opacity_dir)
+    lnm = np.log(np.asarray(model_wave, np.float64))
+    dlnlam = float((lnm[-1] - lnm[0]) / (lnm.size - 1))
+    stride, pix_samples, block = sg._probe_sizes(dlnlam, [np.exp(w) for w in lnw],
+                                                 fc.stellar_node_kms, fc.lsf_kernel_width)
+    h_ln = stride * dlnlam
+    shift_pix = sum(_per_coefficient(fc.wave_prior_pix, fc.n_wave_coeffs)) if fc.fit_wave_solution else 0.0
+    side = sg._split_room(block) + math.ceil(shift_pix * pix_samples / stride) + 1
+    u = np.concatenate([np.log1p((fc.rv_kms + _barycentric_kms(d, fc)) / C_KMS) for d in nights])
+    spread = float(np.ptp(u))
+    close = (2 * sg._split_room(block) + 2) * h_ln + spread    # closer: the grid needs the mask
+    need = 2 * side * h_ln + spread                             # between two orders' unmasked pixels
+    kms = lambda ln: ln * C_KMS
+
+    valid, snr2 = [], []                   # per night, (O, P): valid in any exposure, Σ (f/σ)²
+    for d in nights:
+        flux = np.asarray(d["flux"], np.float64).reshape(-1, O, P)
+        err = np.asarray(d["err"], np.float64).reshape(-1, O, P)
+        mask = np.asarray(d.get("mask", np.ones(flux.shape, bool)), bool).reshape(-1, O, P)
+        ok = (mask & np.isfinite(flux) & np.isfinite(err) & (err > 0)
+              & (flux >= fc.saturation_mask_threshold))
+        ratio = np.where(ok, np.where(ok, flux, 0.0) / np.where(ok, err, 1.0), 0.0)
+        valid.append(ok.any(axis=0))
+        snr2.append((ratio ** 2).sum(axis=0))
+    total = sum(float(s.sum()) for s in snr2) or 1.0
+    cut = [np.zeros((O, P), bool) for _ in nights]
+
+    def edge(o, last):
+        """The last (or first) unmasked ln λ of order ``o`` over the nights; None if none."""
+        ends = [lnw[i][o][valid[i][o] & ~cut[i][o]] for i in range(len(nights))]
+        ends = [(e.max() if last else e.min()) for e in ends if e.size]
+        return (max(ends) if last else min(ends)) if ends else None
+
+    def select(o, *, upto=None, beyond=None):
+        """Per night, the unmasked pixels of order ``o`` with ln λ ≤ ``upto`` (or ≥ ``beyond``)."""
+        return [valid[i][o] & ~cut[i][o]
+                & ((lnw[i][o] <= upto) if upto is not None else (lnw[i][o] >= beyond))
+                for i in range(len(nights))]
+
+    def weight(o, sel):
+        return sum(float(snr2[i][o][s].sum()) for i, s in enumerate(sel))
+
+    def drop(o, sel):
+        """Mask the selected pixels; ``(pixels per exposure, share of the S/N²)``."""
+        for i, s in enumerate(sel):
+            cut[i][o] |= s
+        return max(int(s.sum()) for s in sel), weight(o, sel) / total
+
+    order = np.argsort(np.min([w.min(axis=1) for w in lnw], axis=0))
+    n_pairs = 0
+    for a, b in zip(order[:-1], order[1:]):
+        if min(w[b].min() for w in lnw) - max(w[a].max() for w in lnw) >= close:
+            continue                       # far enough apart for their own nodes
+        n_pairs += 1
+        hi, lo = edge(a, last=True), edge(b, last=False)
+        if hi is None or lo is None:
+            continue
+        notes = []
+        if hi >= lo:                       # 1. the overlap goes from the dimmer order
+            head = f"Orders {a}/{b} overlap by {kms(hi - lo):.0f} km/s"
+            sel_a, sel_b = select(a, beyond=lo), select(b, upto=hi)
+            dim, sel = (b, sel_b) if weight(b, sel_b) <= weight(a, sel_a) else (a, sel_a)
+            n, share = drop(dim, sel)
+            notes.append(f"masked order {dim} there ({n} px, {100 * share:.2f}% of the S/N²)")
+        else:
+            head = f"Orders {a}/{b} are {kms(lo - hi):.0f} km/s apart"
+        hi, lo = edge(a, last=True), edge(b, last=False)
+        if hi is None or lo is None:
+            logger.warning("%s: one of them has no unmasked pixels left.", head)
+            continue
+        short = need - (lo - hi)
+        if short > 0:                      # 2. widen the gap on the side with less S/N
+            sel_a, sel_b = select(a, beyond=hi - short), select(b, upto=lo + short)
+            o, sel, end = (a, sel_a, "last") if weight(a, sel_a) <= weight(b, sel_b) else (
+                b, sel_b, "first")
+            n, share = drop(o, sel)
+            notes.append(f"masked order {o}'s {end} {n} px ({100 * share:.2f}% of the S/N²) "
+                         f"to leave the {kms(need):.0f} km/s the template needs")
+        if not notes:
+            notes.append(f"their unmasked pixels already leave the {kms(need):.0f} km/s "
+                         "the template needs")
+        logger.info("%s: %s.", head, "; ".join(notes))
+
+    lost = sum(float(snr2[i][c].sum()) for i, c in enumerate(cut))
+    logger.info("Masked %d pixels per exposure at %d order boundaries (%.1f%% of the S/N²).",
+                max(int(c.sum()) for c in cut), n_pairs, 100 * lost / total)
+    out = []
+    for d, c in zip(nights, cut):
+        mask = np.asarray(d.get("mask", np.ones(np.shape(d["flux"]), bool)), bool)
+        out.append({**d, "mask": mask & ~c.reshape((1,) * (mask.ndim - 2) + c.shape)})
+    return out[0] if single else out
+
+
 def fit_nights(datasets: Sequence[dict], fit_config: FitConfig = FitConfig(), *,
                initial: Optional[Sequence[FitResult]] = None,
                print_freq: int = 10, rng_seed: int = 42) -> MultiNightResult:
@@ -223,7 +383,8 @@ def fit_nights(datasets: Sequence[dict], fit_config: FitConfig = FitConfig(), *,
                                  [np.asarray(n.data["wave"], np.float64) for n in nights],
                                  velocities, node_kms=fc.stellar_node_kms,
                                  lsf_kernel_width=nights[0].prep.config.lsf_kernel_width,
-                                 wave_shift_pix=margin_pix)
+                                 wave_shift_pix=margin_pix,
+                                 obs_valid=[np.asarray(n.obs_w) > 0 for n in nights])
     nights = [n._replace(
         geom=sg.night_geometry(grid, n.model_wave, np.asarray(n.prep.context.order_start_idx),
                                n.prep.config.order_size),
@@ -260,9 +421,10 @@ def fit_nights(datasets: Sequence[dict], fit_config: FitConfig = FitConfig(), *,
             if bool(overflow):
                 shift = _max_wave_shift_pix(s, night.prep.context, night.prep.config)
                 raise RuntimeError(
-                    "A pixel's template window fell outside its node row: the fitted "
-                    f"wavelength-solution shifts (up to {shift:.1f} pixels) outgrew the "
-                    f"template's node margins ({margin_pix:.0f} pixels).")
+                    "An unmasked pixel's template window fell outside its order's nodes: "
+                    f"the fitted wavelength-solution shifts (up to {shift:.1f} pixels) "
+                    f"outgrew the template's node margins ({margin_pix:.0f} pixels, less "
+                    "where neighbouring orders split the nodes between them).")
             G, b, chi2_0 = ((Gi, bi, ci) if G is None else (G + Gi, b + bi, chi2_0 + ci))
         t1 = time.time()
         # The hyperparameters follow the tellurics: refit them in every star step.

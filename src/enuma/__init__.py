@@ -27,7 +27,7 @@ from enuma.inference.fit import (
     fit_spectrum,
     fit_timeseries,
 )
-from enuma.inference.stellar_em import MultiNightResult, fit_nights
+from enuma.inference.stellar_em import MultiNightResult, fit_nights, mask_order_overlaps
 from enuma.model.forward import forward_model, forward_model_batched
 from enuma.io.results import (
     generate_best_fit_spectrum,
@@ -64,6 +64,7 @@ __all__ = [
     "fit_spectrum",
     "fit_timeseries",
     "fit_nights",
+    "mask_order_overlaps",
     "MultiNightResult",
     "save_best_fit_params_json",
     "load_best_fit_params_json",

@@ -21,7 +21,7 @@ from enuma.inference.sites import (
 from enuma.inference.optimizer import run_svi
 from enuma.inference.fit import FitResult, fit_spectrum, fit_timeseries, telluric_model
 from enuma.inference.stellar_gp import StellarTemplate
-from enuma.inference.stellar_em import MultiNightResult, fit_nights
+from enuma.inference.stellar_em import MultiNightResult, fit_nights, mask_order_overlaps
 
 __all__ = [
     "Param",
@@ -38,6 +38,7 @@ __all__ = [
     "fit_spectrum",
     "fit_timeseries",
     "fit_nights",
+    "mask_order_overlaps",
     "MultiNightResult",
     "StellarTemplate",
 ]

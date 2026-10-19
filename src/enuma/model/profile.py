@@ -7,8 +7,9 @@ and H2O can instead come from a date/site-specific GDAS analysis column
 
 The ``FitConfig``-driven builders ``setup_model`` consumes also live here: the
 layer grid (``build_altitude_grid``), the reference T/P/VMR on it
-(``build_reference_atmosphere``, with H2O scaled to the target PWV), and the
-per-layer GP prior factors (``build_gp_factors``).
+(``build_reference_atmosphere``, with H2O scaled to the target PWV or, failing
+that, the surface relative humidity), and the per-layer GP prior factors
+(``build_gp_factors``).
 """
 
 import datetime as dt
@@ -114,6 +115,11 @@ def _download_gdas_grib(local_path: str, cycle: dt.datetime) -> None:
     logger.info("  → %s  (%.1f MB)", local_path, os.path.getsize(local_path) / 1e6)
 
 
+def _es_water_pa(t_k):
+    """Saturation vapour pressure over liquid water (Pa), Buck (1981)."""
+    return 611.21 * np.exp(17.502 * (t_k - 273.16) / (t_k - 32.19))
+
+
 def _q_from_rh(rh_pct, t_k, p_hpa):
     """Specific humidity (kg/kg) from GFS relative humidity (%).
 
@@ -124,7 +130,7 @@ def _q_from_rh(rh_pct, t_k, p_hpa):
     water above ~10 hPa, so q is held at its 10 hPa value there, and floored
     at 1e-6 kg/kg (~1.6 ppmv) where RH rounds to zero.
     """
-    es_water = 611.21 * np.exp(17.502 * (t_k - 273.16) / (t_k - 32.19))  # Pa
+    es_water = _es_water_pa(t_k)
     es_ice = 611.21 * np.exp(22.587 * (t_k - 273.16) / (t_k + 0.7))      # Pa
     w = np.clip((t_k - 253.16) / 20.0, 0.0, 1.0)
     e = rh_pct / 100.0 * (w * es_water + (1.0 - w) * es_ice)
@@ -385,19 +391,23 @@ def build_altitude_grid(fc: FitConfig, obs_alt_m: float):
     return z_boundaries, z_centers
 
 
+def _pwv_mm(vmr_h2o, p_ref_boundaries) -> float:
+    """Zenith PWV (mm) of a layer H2O VMR profile, integrated with the same
+    dry-air-column formula the forward model uses."""
+    air_column = np.abs(np.diff(np.asarray(p_ref_boundaries))) / (MMW_DRY_AIR * G_EARTH)
+    return float(np.sum(np.asarray(vmr_h2o) * air_column)) * MMW_H2O * 10.0  # molec/cm² → mm
+
+
 def _scale_h2o_to_pwv(vmr_ref_centers, p_ref_boundaries, pwv_mm):
     """Return ``vmr_ref_centers`` with H2O rescaled to a target PWV.
 
-    The reference column is integrated with the same dry-air-column formula
-    the forward model uses. No-op if PWV is None or H2O is absent.
+    No-op if PWV is None or H2O is absent.
     """
     if pwv_mm is None or "h2o" not in vmr_ref_centers:
         return vmr_ref_centers
 
-    p_bnd = np.asarray(p_ref_boundaries)
     vmr_h2o = np.asarray(vmr_ref_centers["h2o"])
-    air_column = np.abs(np.diff(p_bnd)) / (MMW_DRY_AIR * G_EARTH)
-    pwv_ref_mm = float(np.sum(vmr_h2o * air_column)) * MMW_H2O * 10.0  # molec/cm² → mm
+    pwv_ref_mm = _pwv_mm(vmr_h2o, p_ref_boundaries)
     if pwv_ref_mm <= 0:
         logger.warning("Reference H2O column integrates to PWV=%.3g mm — skipping scaling.", pwv_ref_mm)
         return vmr_ref_centers
@@ -405,6 +415,38 @@ def _scale_h2o_to_pwv(vmr_ref_centers, p_ref_boundaries, pwv_mm):
     scale = pwv_mm / pwv_ref_mm
     logger.info("Scaled H2O reference by %.3f: reference PWV=%.3f mm → target PWV=%.3f mm.",
                 scale, pwv_ref_mm, pwv_mm)
+    return {**vmr_ref_centers, "h2o": jnp.asarray(vmr_h2o * scale)}
+
+
+def _scale_h2o_to_rh(vmr_ref_centers, t_ref_boundaries, p_ref_boundaries, vmr_ref_boundaries,
+                     rh_pct, temp_k=None):
+    """Return ``vmr_ref_centers`` with H2O rescaled to the relative humidity
+    measured at the site, the fallback when no PWV is available.
+
+    RH and the air temperature ``temp_k`` (the reference temperature at the site
+    when None) give the water-vapour pressure ``e = RH * e_s(T)``, with saturation
+    over liquid water as weather stations report it. The whole profile is scaled
+    so its VMR at the site (the bottom boundary) becomes ``e / (p - e)``, the
+    dry-air ratio of the GDAS column, at the reference surface pressure ``p``.
+    No-op if RH is None or H2O is absent.
+    """
+    if rh_pct is None or "h2o" not in vmr_ref_centers:
+        return vmr_ref_centers
+    rh_pct = float(rh_pct)
+    if not 0.0 < rh_pct <= 100.0:
+        logger.warning("Relative humidity %.3g%% is outside (0, 100] — skipping H2O scaling.", rh_pct)
+        return vmr_ref_centers
+
+    t_k = float(t_ref_boundaries[0]) if temp_k is None else float(temp_k)
+    p_pa = float(p_ref_boundaries[0]) * 0.1                         # Ba → Pa
+    e_pa = rh_pct / 100.0 * _es_water_pa(t_k)
+    scale = e_pa / (p_pa - e_pa) / float(vmr_ref_boundaries["h2o"][0])
+
+    vmr_h2o = np.asarray(vmr_ref_centers["h2o"])
+    pwv_ref_mm = _pwv_mm(vmr_h2o, p_ref_boundaries)
+    logger.info("Scaled H2O reference by %.3f to match surface RH=%.1f%% at T=%.1f K%s: "
+                "reference PWV=%.3f mm → %.3f mm.", scale, rh_pct, t_k,
+                " (reference T)" if temp_k is None else "", pwv_ref_mm, pwv_ref_mm * scale)
     return {**vmr_ref_centers, "h2o": jnp.asarray(vmr_h2o * scale)}
 
 
@@ -422,10 +464,13 @@ def _resolve_reference_profile_path(source, nc_path, obs_mjd, location, cache_di
 
 
 def build_reference_atmosphere(fc: FitConfig, z_centers, z_boundaries, cache_dir,
-                               *, obs_mjd, location: Optional[SiteLocation], pwv_mm):
-    """Reference T/P/VMR on the layer grid (H2O scaled to the target PWV) plus the
-    GDAS (u, v) winds in m/s on the layer centres (None when the source is not
-    GDAS or the column carries no winds)."""
+                               *, obs_mjd, location: Optional[SiteLocation], pwv_mm,
+                               rh_pct=None, ambient_temp_k=None):
+    """Reference T/P/VMR on the layer grid plus the GDAS (u, v) winds in m/s on the
+    layer centres (None when the source is not GDAS or the column carries no winds).
+
+    H2O is scaled to the target PWV when there is one, else to the surface relative
+    humidity ``rh_pct`` (%) at the air temperature ``ambient_temp_k`` (K)."""
     profile_path = _resolve_reference_profile_path(
         fc.reference_profile_source, fc.reference_profile_nc_path,
         obs_mjd, location, cache_dir)
@@ -433,11 +478,15 @@ def build_reference_atmosphere(fc: FitConfig, z_centers, z_boundaries, cache_dir
         z_centers, fc.species,
         source=fc.reference_profile_source,
         profile_nc_path=profile_path)
-    _, p_ref_boundaries, _, _ = get_standard_atmosphere(
+    t_ref_boundaries, p_ref_boundaries, vmr_ref_boundaries, _ = get_standard_atmosphere(
         z_boundaries, fc.species,
         source=fc.reference_profile_source,
         profile_nc_path=profile_path)
-    vmr_ref_centers = _scale_h2o_to_pwv(vmr_ref_centers, p_ref_boundaries, pwv_mm)
+    if pwv_mm is not None:
+        vmr_ref_centers = _scale_h2o_to_pwv(vmr_ref_centers, p_ref_boundaries, pwv_mm)
+    else:
+        vmr_ref_centers = _scale_h2o_to_rh(vmr_ref_centers, t_ref_boundaries, p_ref_boundaries,
+                                           vmr_ref_boundaries, rh_pct, ambient_temp_k)
     return t_ref_centers, p_ref_centers, p_ref_boundaries, vmr_ref_centers, winds
 
 
