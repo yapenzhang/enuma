@@ -29,10 +29,10 @@ logger = logging.getLogger("enuma.plotting.stellar")
 def plot_stellar_template(result, output_path: str = "stellar_template.pdf"):
     """The learned stellar template per order, in the stellar rest frame.
 
-    Shows the posterior mean with its ±1σ band, the prior anchor
-    ``1 + s_o (reference − 1)`` and the reference spectrum. Grey bands mark nodes the
-    data barely constrain (posterior σ above half the prior σ), e.g. under
-    saturated telluric lines, where the template falls back to the anchor.
+    Shows the posterior mean with its ±1σ band and the reference spectrum, which is
+    the prior mean. Grey bands mark nodes the data barely constrain (posterior σ
+    above half the prior σ), e.g. under saturated telluric lines, where the template
+    falls back to the reference.
 
     ``result`` is a :class:`~enuma.inference.fit.FitResult` with ``stellar`` set.
     """
@@ -44,8 +44,7 @@ def plot_stellar_template(result, output_path: str = "stellar_template.pdf"):
     for o, ax in enumerate(axes):
         ok = np.isfinite(t.wave[o])
         w, f, s = t.wave[o][ok], t.flux[o][ok], t.sigma[o][ok]
-        ax.plot(w, t.reference[o][ok], color="0.6", lw=0.7, label="reference")
-        ax.plot(w, t.anchor[o][ok], "--", color="C1", lw=0.8, label="prior anchor")
+        ax.plot(w, t.reference[o][ok], "--", color="C1", lw=0.8, label="reference (prior mean)")
         ax.fill_between(w, f - s, f + s, color="C0", alpha=0.35, lw=0)
         ax.plot(w, f, color="C0", lw=0.9, label="learned template")
         weak = np.isfinite(s) & (s > 0.5 * t.prior_sigma[o][ok])
@@ -53,10 +52,10 @@ def plot_stellar_template(result, output_path: str = "stellar_template.pdf"):
                         color="0.85", alpha=0.6, lw=0)
         ax.set_xlim(w[0], w[-1])
         ax.set_ylabel("Normalised flux")
-        ax.set_title(f"Order {o}: reference scale s = {t.hyper['scale'][o]:.2f}, "
-                     f"prior σ = {t.hyper['sigma'][o]:.3f}, "
+        ax.set_title(f"Order {o}: prior σ = {t.hyper['sigma'][o]:.3f}, "
+                     f"α = {t.hyper['alpha'][o]:.2f}, "
                      f"ℓ = {t.hyper['ell_kms'][o]:.2f} km/s", fontsize="medium")
-    axes[0].legend(fontsize="small", ncol=3, loc="lower left")
+    axes[0].legend(fontsize="small", ncol=2, loc="lower left")
     axes[-1].set_xlabel("Rest-frame wavelength (nm)")
     fig.suptitle(f"Learned stellar template (RV = {t.rv_kms:.2f} km/s)", fontsize=12)
     fig.savefig(output_path)

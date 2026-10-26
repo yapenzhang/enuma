@@ -51,6 +51,7 @@ Every fit takes a plain ``dict`` of NumPy arrays. A single exposure and a time
 series dataset differ only in the shapes: ``O`` is the
 number of spectral orders, ``P`` the number of pixels per order, and ``N`` the number of
 exposures.
+The wavelengths are in nanometers throughout.
 
 .. list-table::
    :header-rows: 1
@@ -83,8 +84,8 @@ exposures.
    * - ``mjd``
      - scalar, optional
      - ``(N,)``, optional
-     - Observation time (MJD, UTC). Needed for the GDAS profile and the barycentric
-       velocity.
+     - Observation time (MJD, UTC). Needed for the GDAS profile, the barycentric
+       velocity, and the date of the CO2, CH4 and N2O abundances.
    * - ``baryrv``
      - n/a
      - ``(N,)``, optional
@@ -170,7 +171,7 @@ Observatory
 It sets the surface altitude of the model atmosphere, the barycentric correction,
 and the location of the GDAS profile. Pass any astropy site name
 (``astropy.coordinates.EarthLocation.get_site_names()``, e.g. ``"paranal"``,
-``"keck"``, ``"lasilla"``) or an ``EarthLocation``. When astropy can't resolve
+``"keck"``, ``"gemini_south"``) or an ``EarthLocation``. When astropy can't resolve
 the site (e.g. offline), set
 :attr:`~enuma.config.FitConfig.site_location` ``= (lat_deg, lon_deg, alt_m)``.
 
@@ -182,7 +183,7 @@ reference speeds up convergence and makes the result more robust.
 :attr:`~enuma.config.FitConfig.reference_profile_source` selects where the
 reference temperature, pressure and water-vapour profiles come from:
 
-``"mipas"`` (default)
+``"mipas"``
     The bundled MIPAS climatological atmosphere profiles. They are stored in ``data/`` 
     (e.g., ``equ.atm``, ``day.atm``, ``ngt.atm``), but not specific to the night or site.
 
@@ -194,28 +195,27 @@ reference temperature, pressure and water-vapour profiles come from:
     (2021-03-22) the column stops at 1 hPa and humidity is derived from relative
     humidity; from then on it reaches 0.01 hPa. Above the top GDAS level, T, P,
     H2O and O3 switch to MIPAS. To use a column you already have, pass it with
-    :attr:`~enuma.config.FitConfig.reference_profile_nc_path`. Recommended when
-    the date is covered.
+    :attr:`~enuma.config.FitConfig.reference_profile_nc_path`. 
 
 In both cases the dry species (CO2, CH4, N2O, CO, O2, …) start from the MIPAS
 profiles; with ``"gdas"``, O3 also comes from GDAS. For a time series, the
 median MJD of the night selects the GDAS column.
 
-If the header or :attr:`~enuma.config.FitConfig.pwv_mm` provides the precipitable
-water vapour, the reference H2O profile is rescaled to match it before the fit.
-Without a PWV, the relative humidity measured at the site is used instead when
-the header has it: the profile is rescaled so its water vapour pressure at the
-site altitude matches that humidity at the measured air temperature (or at the
-reference temperature, if the header has none). A surface reading only sets the
-amount of water near the ground; the shape of the profile above still comes from
-the reference. This works best with ``"gdas"``, whose profile is specific to the
-night, while the climatological MIPAS shape can leave the column off by a factor
-of about two.
+The MIPAS profiles date from about 2000, so CO2, CH4 and N2O are rescaled to the
+NOAA global mean at the observation date, each profile keeping its shape. Past
+the last year of the bundled NOAA annual means, the recent trend is extrapolated.
 
 With the GDAS source you can also set
-:attr:`~enuma.config.FitConfig.wind_enabled` ``=True`` in :class:`~enuma.config.FitConfig`. Each layer's absorption is
-then Doppler-shifted by the line-of-sight GDAS wind.
+:attr:`~enuma.config.FitConfig.wind_enabled` ``=True`` in :class:`~enuma.config.FitConfig`. 
+Each layer's absorption is then Doppler-shifted by the line-of-sight GDAS wind.
 
+
+If the header or :attr:`~enuma.config.FitConfig.pwv_mm` provides the precipitable
+water vapour, the reference H2O profile is rescaled to match it before the fit.
+Without a PWV, the relative humidity measured at the site is used instead: 
+the profile is rescaled so its water vapour pressure at the
+site altitude matches that humidity at the measured air temperature (or at the
+reference temperature, if the header has none). 
 
 
 .. _fit-windows:
@@ -294,8 +294,9 @@ column of ``best_fit.txt`` (see :ref:`outputs`) and through
 
 .. See :example:`fit_mdwarf_timeseries.py` for a full example of fitting an M dwarf this way.
 
-When the template does not match the observed stellar lines well, learn the stellar
-spectrum from the data instead with ``stellar_model="gp"`` (time series only); see
+When the PHOENIX template does not match the observed stellar lines well (e.g. for 
+late-type stars), learn the stellar
+spectrum from the data instead with ``stellar_model="gp"`` (time series data only); see
 :ref:`stellar-learned`.
 
 
@@ -366,6 +367,8 @@ leading ``(N,)`` axis) or shared by the whole night:
      - ``dry_vmr_per_exposure=True``
    * - resolution R(λ) (``resolution_coeffs``)
      - ``resolution_per_exposure=True``
+   * - Voigt LSF width (``lsf_gamma_ratio``)
+     - always shared
    * - wavelength solution (``wave_coeffs``)
      - ``wave_per_exposure=True``
    * - continuum (``continuum_coeffs``)

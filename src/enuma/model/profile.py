@@ -7,9 +7,9 @@ and H2O can instead come from a date/site-specific GDAS analysis column
 
 The ``FitConfig``-driven builders ``setup_model`` consumes also live here: the
 layer grid (``build_altitude_grid``), the reference T/P/VMR on it
-(``build_reference_atmosphere``, with H2O scaled to the target PWV or, failing
-that, the surface relative humidity), and the per-layer GP prior factors
-(``build_gp_factors``).
+(``build_reference_atmosphere``, with CO2/CH4/N2O brought to the observation date
+and H2O scaled to the target PWV or, failing that, the surface relative
+humidity), and the per-layer GP prior factors (``build_gp_factors``).
 """
 
 import datetime as dt
@@ -391,6 +391,83 @@ def build_altitude_grid(fc: FitConfig, obs_alt_m: float):
     return z_boundaries, z_centers
 
 
+# NOAA GML global annual means from the marine surface sites, as dry-air mole
+# fractions, from https://gml.noaa.gov/ccgg/trends/ ({co2,ch4,n2o}_annmean_gl.txt).
+# Append a row each year; NOAA revises the latest year for a few months.
+_NOAA_GLOBAL_ANNUAL_MEANS = np.array([
+    # year  CO2 ppm  CH4 ppb  N2O ppb
+    (2001, 370.57, 1771.29, 316.36),
+    (2002, 372.58, 1772.68, 316.94),
+    (2003, 375.14, 1777.33, 317.63),
+    (2004, 376.95, 1777.13, 318.25),
+    (2005, 378.98, 1774.25, 318.91),
+    (2006, 381.15, 1774.94, 319.82),
+    (2007, 382.90, 1781.33, 320.44),
+    (2008, 385.02, 1787.01, 321.50),
+    (2009, 386.50, 1793.54, 322.27),
+    (2010, 388.75, 1798.89, 323.18),
+    (2011, 390.62, 1803.04, 324.21),
+    (2012, 392.65, 1808.07, 325.05),
+    (2013, 395.40, 1813.43, 325.94),
+    (2014, 397.34, 1822.59, 327.09),
+    (2015, 399.65, 1834.19, 328.17),
+    (2016, 403.07, 1843.18, 328.95),
+    (2017, 405.22, 1849.62, 329.74),
+    (2018, 407.61, 1857.34, 330.90),
+    (2019, 410.07, 1866.62, 331.88),
+    (2020, 412.45, 1878.78, 333.01),
+    (2021, 414.70, 1894.87, 334.29),
+    (2022, 417.08, 1911.01, 335.63),
+    (2023, 419.35, 1921.46, 336.70),
+    (2024, 422.79, 1929.47, 337.72),
+    (2025, 425.62, 1936.03, 338.86),
+])
+# gas: (column above, unit, tropospheric value of the bundled MIPAS profiles in that
+# unit). The MIPAS values (CH4 from equ.atm) are the NOAA means of about 2000-2002.
+_NOAA_GASES = {"co2": (1, "ppm", 368.5), "ch4": (2, "ppb", 1773.0), "n2o": (3, "ppb", 317.0)}
+
+
+def _noaa_global_mean(gas: str, year: float) -> float:
+    """NOAA global mean of ``gas`` at the decimal ``year``: the annual means, placed
+    at mid-year, interpolated linearly, and extended with the trend of the first or
+    last five years outside the table."""
+    t = _NOAA_GLOBAL_ANNUAL_MEANS[:, 0] + 0.5
+    v = _NOAA_GLOBAL_ANNUAL_MEANS[:, _NOAA_GASES[gas][0]]
+    if year > t[-1]:
+        return float(v[-1] + (v[-1] - v[-6]) / (t[-1] - t[-6]) * (year - t[-1]))
+    if year < t[0]:
+        return float(v[0] + (v[5] - v[0]) / (t[5] - t[0]) * (year - t[0]))
+    return float(np.interp(year, t, v))
+
+
+def _scale_gases_to_date(vmr_ref_centers, obs_mjd):
+    """Return ``vmr_ref_centers`` with the MIPAS CO2, CH4 and N2O rescaled from their
+    ~2000 abundances to the NOAA global means at the observation date, each profile
+    keeping its shape. No-op (with a warning) without an observation time."""
+    gases = [g for g in _NOAA_GASES if g in vmr_ref_centers]
+    if not gases:
+        return vmr_ref_centers
+    if obs_mjd is None:
+        logger.warning("No observation time; %s keep the MIPAS abundances of ~2000.",
+                       "/".join(g.upper() for g in gases))
+        return vmr_ref_centers
+
+    year = 2000.0 + (float(obs_mjd) - 51544.0) / 365.25          # MJD 51544 = 2000-01-01
+    first, last = _NOAA_GLOBAL_ANNUAL_MEANS[[0, -1], 0]
+    if not first <= year < last + 1:
+        logger.warning("Observation at %.2f lies outside the NOAA table (%d-%d); extrapolating "
+                       "the CO2/CH4/N2O trend. Append the newer annual means to "
+                       "_NOAA_GLOBAL_ANNUAL_MEANS.", year, first, last)
+    out, notes = dict(vmr_ref_centers), []
+    for gas in gases:
+        _, unit, mipas = _NOAA_GASES[gas]
+        mean = _noaa_global_mean(gas, year)
+        out[gas] = jnp.asarray(np.asarray(vmr_ref_centers[gas]) * (mean / mipas))
+        notes.append(f"{gas.upper()} {mean:.1f} {unit} (x{mean / mipas:.3f})")
+    logger.info("Scaled MIPAS gases to the NOAA global means at %.2f: %s.", year, ", ".join(notes))
+    return out
+
+
 def _pwv_mm(vmr_h2o, p_ref_boundaries) -> float:
     """Zenith PWV (mm) of a layer H2O VMR profile, integrated with the same
     dry-air-column formula the forward model uses."""
@@ -469,7 +546,8 @@ def build_reference_atmosphere(fc: FitConfig, z_centers, z_boundaries, cache_dir
     """Reference T/P/VMR on the layer grid plus the GDAS (u, v) winds in m/s on the
     layer centres (None when the source is not GDAS or the column carries no winds).
 
-    H2O is scaled to the target PWV when there is one, else to the surface relative
+    CO2, CH4 and N2O are rescaled to the NOAA global means at ``obs_mjd``. H2O is
+    scaled to the target PWV when there is one, else to the surface relative
     humidity ``rh_pct`` (%) at the air temperature ``ambient_temp_k`` (K)."""
     profile_path = _resolve_reference_profile_path(
         fc.reference_profile_source, fc.reference_profile_nc_path,
@@ -482,6 +560,7 @@ def build_reference_atmosphere(fc: FitConfig, z_centers, z_boundaries, cache_dir
         z_boundaries, fc.species,
         source=fc.reference_profile_source,
         profile_nc_path=profile_path)
+    vmr_ref_centers = _scale_gases_to_date(vmr_ref_centers, obs_mjd)
     if pwv_mm is not None:
         vmr_ref_centers = _scale_h2o_to_pwv(vmr_ref_centers, p_ref_boundaries, pwv_mm)
     else:

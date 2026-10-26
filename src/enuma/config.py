@@ -46,7 +46,8 @@ class FitConfig:
     #: species; an empty tuple fits no columns (all pinned at the reference VMR).
     fit_species: Optional[Tuple[str, ...]] = None
 
-    #: Fit the instrument resolution R(λ) per order (else pinned at ``resolution``).
+    #: Fit the instrument resolution R(λ) per order (else pinned at ``resolution``),
+    #: and, for the Voigt LSF, its Lorentzian width.
     fit_resolution: bool = True
     #: Fit the per-order wavelength-solution correction (else no shift).
     fit_wave_solution: bool = True
@@ -147,10 +148,12 @@ class FitConfig:
     #: Initial guess and prior mean of the resolving power, in units of 1e5
     #: (e.g. ``1.0`` = R 100 000).
     resolution: float = 1.0
-    #: LSF shape, one of ``"gaussian"``, ``"voigt"`` (Lorentzian wings), or
-    #: ``"custom"`` (set implicitly by ``lsf_kernel_file``).
+    #: LSF shape, one of ``"gaussian"``, ``"voigt"`` (Lorentzian wings of fitted
+    #: width), or ``"custom"`` (set implicitly by ``lsf_kernel_file``).
     lsf_profile: str = "gaussian"
-    #: Lorentzian HWHM as a fraction of the Gaussian σ (Voigt profile only).
+    #: Lorentzian HWHM as a fraction of the Gaussian σ (Voigt profile only): the
+    #: initial guess and prior mean of the width fitted with the resolution, one
+    #: value for all orders; the fixed width when ``fit_resolution=False``.
     lsf_voigt_gamma_ratio: float = 0.01
     #: Odd pixel extent of the per-chunk LSF kernel on the model grid.
     lsf_kernel_width: int = 101
@@ -242,7 +245,7 @@ class FitConfig:
     #: one or several nights (:func:`~enuma.inference.stellar_em.fit_nights`); it
     #: needs a time series.
     stellar_model: str = "newera"
-    #: Anchor of the learned template's prior: ``"newera"`` (the template selected by
+    #: Mean of the learned template's prior: ``"newera"`` (the template selected by
     #: ``stellar_teff`` / ``stellar_logg`` / …, rotated by the fitted vsini),
     #: ``"flat"``, or a path to a two-column text file (rest-frame wavelength in
     #: nm, continuum-normalised flux).

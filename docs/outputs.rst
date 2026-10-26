@@ -84,8 +84,9 @@ leading ``(N,)`` axis.
      - Latent variables of the H2O-profile GP (below ``h2o_gp_cutoff_z_km``).
    * - ``dry_vmr_scalars``
      - ``{species: (1,)}``
-     - log10 offset of each dry species' VMR profile from the MIPAS reference. A
-       value of 0.05 means the column is 10\ :sup:`0.05` ≈ 1.12 times the reference.
+     - log10 offset of each dry species' VMR profile from its reference (MIPAS,
+       with CO2, CH4 and N2O at the observation date). A value of 0.05 means the
+       column is 10\ :sup:`0.05` ≈ 1.12 times the reference.
    * - ``resolution_coeffs``
      - ``(O, n_resolution_coeffs)``
      - Per-order Legendre series (highest degree first) for the resolving power,
@@ -101,6 +102,11 @@ leading ``(N,)`` axis.
        before the bound. :func:`~enuma.model.forward.instrument_coeffs` gives the
        bounded ones, and :func:`~enuma.model.forward.legendre_polyval` evaluates
        either series.
+   * - ``lsf_gamma_ratio``
+     - scalar
+     - Lorentzian half-width of the Voigt LSF in units of its Gaussian σ, as an
+       absolute value (:func:`~enuma.model.forward.lsf_gamma_ratio`); used only
+       with ``lsf_profile="voigt"``.
    * - ``continuum_coeffs``
      - ``(O, continuum_n_nodes)``
      - Weights of the per-order cubic B-spline continuum (about 1 for normalised
@@ -159,7 +165,7 @@ Saved files
             "dry_vmr_scalars": {"co2": [0.047], ...},
             "resolution_coeffs": [[...], ...], "wave_coeffs": [[...], ...],
             "continuum_coeffs": [[...], ...],
-            "rv_systemic": 0.0, "vsini": 1.0
+            "rv_systemic": 0.0, "vsini": 1.0, "lsf_gamma_ratio": 0.01
           }
         }
 

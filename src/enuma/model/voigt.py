@@ -107,15 +107,17 @@ def _wofz_humlicek(x, y):
     w3_re, w3_im = _horner3(t_re, t_im)           # t = y - ix
 
     # ---- Region 4:  the core  (s < 5.5  and  y < 0.195·|x| − 0.176) -----
-    # Humlíček's prescription:
-    #   w₄(x, y) = 2·exp(−x²)·[cos(2xy) + i·sin(2xy)]  −  w₃(x, −y)
-    # i.e. evaluate the Region-3 rational with t_neg = −y − ix.
+    # Reflection: w(z) = conj[ 2·exp(−(x − iy)²) − w₃(x, −y) ], with the
+    # Region-3 rational evaluated at t_neg = −y − ix, i.e.
+    #   Re w =  2·exp(y² − x²)·cos(2xy) − Re w₃(x, −y)
+    #   Im w = −2·exp(y² − x²)·sin(2xy) + Im w₃(x, −y)
+    # (y < 0.2|x| here, so the exponent stays negative).
     w3neg_re, w3neg_im = _horner3(-y, -x)          # t = -y - ix
 
-    exx = jnp.exp(-x * x)
+    exx = jnp.exp(y * y - x * x)
     twoXY = 2.0 * x * y
     w4_re = 2.0 * exx * jnp.cos(twoXY) - w3neg_re
-    w4_im = 2.0 * exx * jnp.sin(twoXY) - w3neg_im
+    w4_im = w3neg_im - 2.0 * exx * jnp.sin(twoXY)
 
     # ---- Blend regions (branchless) --------------------------------------
     mask4 = (s < 5.5) & (y < 0.195 * ax - 0.176)

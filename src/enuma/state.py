@@ -52,6 +52,10 @@ class ModelParameters(NamedTuple):
     # the forward model ignores.
     rv_systemic: jnp.ndarray = np.array(0.0, np.float32)  # scalar, km/s
     vsini: jnp.ndarray = np.array(1.0, np.float32)        # scalar, km/s
+    # Only used when ``ModelConfig.lsf_profile == "voigt"``: the Lorentzian HWHM
+    # of the LSF in units of its Gaussian sigma, as its absolute value (see
+    # :func:`enuma.model.forward.lsf_gamma_ratio`); one value for all orders.
+    lsf_gamma_ratio: jnp.ndarray = np.array(0.01, np.float32)
 
 
 # The structured leaf that fans out to per-species flat sites, and the flat-key
@@ -177,7 +181,7 @@ class ModelConfig(NamedTuple):
     wave_prior_pix: Tuple[float, ...] = (0.3, 0.3, 0.5)
     resolution_prior: Tuple[float, ...] = (0.025, 0.05)
     lsf_profile: str = "gaussian"    # "gaussian" or "voigt"
-    lsf_voigt_gamma_ratio: float = 0.01
+    lsf_voigt_gamma_ratio: float = 0.01  # seed + prior mean of the fitted Voigt width
     # Stellar template multiplication (static, so it gates the forward-model
     # branch at trace time and the pure-telluric path stays bit-identical).
     stellar_enabled: bool = False

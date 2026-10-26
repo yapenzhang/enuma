@@ -10,7 +10,7 @@ import numpyro.distributions as dist
 import numpyro.handlers as handlers
 
 from enuma.model.setup import build_context, load_opacities
-from enuma.model.forward import forward_model, forward_model_batched
+from enuma.model.forward import forward_model, forward_model_batched, lsf_gamma_ratio
 from enuma.config import FitConfig
 from enuma.io.results import save_best_fit_params_json, save_best_fit_spectrum_txt
 from enuma.inference.sites import (
@@ -126,6 +126,33 @@ class FitResult(NamedTuple):
         if self.param_history is not None:
             plot_param_convergence(self.param_history,
                                    output_path=str(out / "fit_param_convergence.png"))
+
+    def reduced_chi2(self) -> Tuple[float, int, int]:
+        """``(reduced chi-square, pixels, free parameters)`` of the best fit: the
+        chi-square over the pixels the likelihood used (``obs_mask``), divided by
+        the pixels minus the free parameters."""
+        if self.layout.n_exp:
+            model = forward_model_batched(self.params, self.context, self.config, self.layout)
+        else:
+            model = forward_model(self.params, self.context, self.config)
+        resid = (jnp.asarray(self.data["flux"]) - model) / jnp.asarray(self.data["err"])
+        mask = jnp.asarray(self.obs_mask)
+        chi2 = float(jnp.sum(jnp.where(mask, resid * resid, 0.0)))
+        n_pix = int(jnp.sum(mask))
+        _, free = partition_sites(self.context, self.config, self.fit_config,
+                                  self.dry_species, self.layout)
+        n_free = sum(int(np.size(v)) for v in free.values())
+        return chi2 / max(n_pix - n_free, 1), n_pix, n_free
+
+
+def _log_fit_quality(result: FitResult) -> None:
+    """Log the reduced chi-square of a best fit, and the fitted Voigt LSF width."""
+    red_chi2, n_pix, n_free = result.reduced_chi2()
+    logger.info("Best fit: reduced chi2 = %.3f (%d pixels, %d free parameters).",
+                red_chi2, n_pix, n_free)
+    if result.config.lsf_profile == "voigt":
+        logger.info("Voigt LSF: Lorentzian HWHM = %.3f x Gaussian sigma.",
+                    float(lsf_gamma_ratio(result.params)))
 
 
 def _load_observation(data: dict, fit_config: FitConfig):
@@ -361,9 +388,12 @@ def _fit_windowed(data: dict, fit_config: FitConfig, n_exp: int, *,
 def _run_fit(data: dict, fit_config: FitConfig, n_exp: int, *,
              print_freq: int, rng_seed: int) -> FitResult:
     if fit_config.fit_windows:
-        return _fit_windowed(data, fit_config, n_exp,
-                                 print_freq=print_freq, rng_seed=rng_seed)
-    return _fit_full(data, fit_config, n_exp, print_freq=print_freq, rng_seed=rng_seed)
+        result = _fit_windowed(data, fit_config, n_exp,
+                               print_freq=print_freq, rng_seed=rng_seed)
+    else:
+        result = _fit_full(data, fit_config, n_exp, print_freq=print_freq, rng_seed=rng_seed)
+    _log_fit_quality(result)
+    return result
 
 
 def fit_spectrum(

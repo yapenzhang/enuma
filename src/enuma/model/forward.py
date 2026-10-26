@@ -20,6 +20,7 @@ __all__ = [
     "bounded",
     "resolution_loc",
     "instrument_coeffs",
+    "lsf_gamma_ratio",
     "expand_tp_profiles",
     "net_stellar_rv",
     "get_layer_properties",
@@ -50,14 +51,15 @@ def apply_variable_lsf(model_flux: jnp.ndarray,
 
     Args:
         model_flux: (n,) flux on the high-res model grid.
-        sigma_pix:  (n,) Gaussian sigma in pixel units at each sample. For
-            Voigt, this is the Gaussian component of the Voigt profile.
+        sigma_pix:  (n,) LSF width at each sample as a Gaussian sigma in pixels,
+            i.e. FWHM / 2.355. A Voigt profile keeps this FWHM: its Gaussian core
+            narrows as the Lorentzian part grows.
         n_chunks: number of constant-width chunks per order (static). Increase for
             steeper width gradients; 20 is a sensible default for ≤10 % width
             variation across the input.
         kernel_width: odd integer, total kernel extent in pixels.
         profile: "gaussian" or "voigt" (static).
-        voigt_gamma_ratio: Lorentzian HWHM / Gaussian sigma for the Voigt
+        voigt_gamma_ratio: Lorentzian HWHM / Gaussian core sigma for the Voigt
             profile. Ignored for Gaussian.
 
     Returns:
@@ -84,8 +86,16 @@ def apply_variable_lsf(model_flux: jnp.ndarray,
     if profile == "gaussian":
         kernels = jnp.exp(-0.5 * (x[None, :] / safe_s) ** 2)
     elif profile == "voigt":
-        gamma = jnp.maximum(voigt_gamma_ratio * safe_s, 1e-8)
-        kernels = voigt_profile(x[None, :], 0.0, safe_s, gamma)
+        # Hold the FWHM at the resolution's and let the ratio set only the shape:
+        # with the Olivero & Longbothum (1977) FWHM, a core sigma s and HWHM
+        # gamma = ratio * s give FWHM = s * (1.0692 ratio + sqrt(0.8664 ratio^2 +
+        # 2.355^2)). Otherwise wider wings would also widen the core, and the fit
+        # could not trade the ratio against R.
+        ratio = voigt_gamma_ratio
+        core = safe_s * LSF_FWHM_TO_SIGMA / (
+            1.0692 * ratio + jnp.sqrt(0.8664 * ratio ** 2 + LSF_FWHM_TO_SIGMA ** 2))
+        gamma = jnp.maximum(ratio * core, 1e-8)
+        kernels = voigt_profile(x[None, :], 0.0, core, gamma)
     kernels = kernels / jnp.sum(kernels, axis=1, keepdims=True)
 
     def conv(start, kernel):
@@ -161,6 +171,13 @@ def instrument_coeffs(params: ModelParameters,
     res = bounded(params.resolution_coeffs, resolution_loc(config),
                   jnp.asarray(config.resolution_prior))
     return wave, res
+
+
+def lsf_gamma_ratio(params: ModelParameters) -> jnp.ndarray:
+    """Lorentzian HWHM of the Voigt LSF over its Gaussian sigma. The fitted site
+    is unconstrained so it moves linearly from its small seed; its absolute value
+    is the width."""
+    return jnp.abs(params.lsf_gamma_ratio)
 
 
 def expand_tp_profiles(ctx: ModelContext, params: ModelParameters
@@ -269,7 +286,7 @@ def _optical_depth(ctx: ModelContext, params: ModelParameters,
 
 def _process_order(wave_coeffs, res_coeffs, order_dwave, pixel_dwave,
                     start_idx, obs_wave_norm, m_off, obs_off, order_ref,
-                    *, y_trans, x_pix, config, lsf_kernel):
+                    *, y_trans, x_pix, config, lsf_kernel, voigt_gamma_ratio):
     """Resample one order's slice of the model transmission onto the observed grid.
 
     LSF-convolution, wave-solution shift, and flux-conserving resample. The continuum
@@ -293,7 +310,7 @@ def _process_order(wave_coeffs, res_coeffs, order_dwave, pixel_dwave,
             n_chunks=config.lsf_n_chunks,
             kernel_width=config.lsf_kernel_width,
             profile=config.lsf_profile,
-            voigt_gamma_ratio=config.lsf_voigt_gamma_ratio,
+            voigt_gamma_ratio=voigt_gamma_ratio,
         )
 
     # Wave solution: shift the observed grid (in offset space) by the pixel polynomial.
@@ -343,7 +360,7 @@ def _transmission(params: ModelParameters, ctx: ModelContext,
 
     x_pix = jnp.linspace(-1.0, 1.0, config.order_size)
     process = partial(_process_order, y_trans=y_trans, x_pix=x_pix, config=config,
-                      lsf_kernel=ctx.lsf_kernel)
+                      lsf_kernel=ctx.lsf_kernel, voigt_gamma_ratio=lsf_gamma_ratio(params))
     wave_coeffs, res_coeffs = instrument_coeffs(params, config)
     return jax.vmap(process)(
         wave_coeffs, res_coeffs,

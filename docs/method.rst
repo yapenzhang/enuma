@@ -43,7 +43,8 @@ ratio (VMR) per species (see :ref:`reference-atmosphere`):
 * temperature, pressure and H2O come from the MIPAS climatology or the GDAS
   analysis for the night and site; above the top GDAS level the profile
   switches to MIPAS, with the MIPAS pressure rescaled to match at that level;
-* the dry species always start from MIPAS;
+* the dry species always start from MIPAS, with CO2, CH4 and N2O rescaled to
+  the NOAA global mean at the observation date;
 * the H2O profile is optionally rescaled to a measured precipitable water vapour.
 
 The pressure of each layer is held at its reference value; the fit does not
@@ -114,9 +115,13 @@ Three LSF shapes are available through ``lsf_profile``:
     A Gaussian with FWHM = λ / R.
 
 ``"voigt"``
-    A Voigt profile whose Gaussian core is set by R and whose Lorentzian wings
-    have a half-width of ``lsf_voigt_gamma_ratio`` × σ. Use it when the
-    instrument profile has extended wings.
+    A Voigt profile with FWHM = λ / R whose Lorentzian wings have a half-width
+    of γ times its Gaussian core σ; the core narrows as γ grows, so γ changes
+    the shape of the profile but not its width. The ratio γ is fitted together
+    with R (``lsf_gamma_ratio``; one value for all orders), starting from
+    ``lsf_voigt_gamma_ratio``, and stays fixed there when
+    ``fit_resolution=False``. Use it when the instrument profile has extended
+    wings.
 
 ``"custom"``
     An **empirical LSF** measured for the instrument by passing the text file to ``lsf_kernel_file``:

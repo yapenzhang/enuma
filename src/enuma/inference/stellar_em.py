@@ -11,8 +11,8 @@ The loop of ``docs/stellar.rst``:
    warm-started from the previous round.
 3. Repeat; finish with a star step at the final θ.
 
-The anchor of the template prior (NewEra, flat, or a file) stays fixed in every
-round; only the template, θ and the hyperparameters change.
+The prior mean, the reference spectrum (NewEra, flat, or a file), stays fixed in
+every round; only the template, θ and the hyperparameters change.
 """
 
 import dataclasses
@@ -27,7 +27,7 @@ import numpy as np
 from enuma.config import FitConfig
 from enuma.constants import C_KMS
 from enuma.inference import stellar_gp as sg
-from enuma.inference.fit import FitResult, _fit_full, _optimize, _prepare
+from enuma.inference.fit import FitResult, _fit_full, _log_fit_quality, _optimize, _prepare
 from enuma.inference.sites import partition_sites
 from enuma.model.forward import bounded, legendre_polyval
 from enuma.model.opacity import get_opacities, opacity_wave_grid
@@ -180,13 +180,18 @@ def mask_order_overlaps(datasets: Union[dict, Sequence[dict]],
     shift the fit allows (the sum of the ``wave_prior_pix`` bounds) on each side,
     widened by the spread of the barycentric velocities, so that it holds in the
     stellar rest frame. Order pairs the template separates already are left alone.
-    What is masked is logged.
+    Whole wavelength ranges are masked, whatever their flux, so no saturation
+    threshold of the fit can bring a pixel back. What is masked is logged.
+
+    :func:`fit_nights` (and so :func:`~enuma.inference.fit.fit_timeseries` with
+    ``stellar_model="gp"``) applies this itself, with its own configuration; call it
+    to see or reuse the mask. Applying it twice changes nothing.
 
     Args:
         datasets: a night dict, or a sequence of them as for :func:`fit_nights`. All
             nights are masked at the same wavelengths, since they share the template.
         fit_config: the fit's configuration. Its node spacing, LSF kernel,
-            wavelength-shift bounds, saturation threshold, RV and observatory apply.
+            wavelength-shift bounds, RV and observatory apply.
         model_wave: the opacity wavelength grid (nm); read from the opacity files
             when omitted.
 
@@ -219,13 +224,14 @@ def mask_order_overlaps(datasets: Union[dict, Sequence[dict]],
     need = 2 * side * h_ln + spread                             # between two orders' unmasked pixels
     kms = lambda ln: ln * C_KMS
 
-    valid, snr2 = [], []                   # per night, (O, P): valid in any exposure, Σ (f/σ)²
+    # Any pixel the data keep counts: whatever else the fit masks only moves the
+    # orders' unmasked edges further apart.
+    valid, snr2 = [], []                   # per night, (O, P): kept in any exposure, Σ (f/σ)²
     for d in nights:
         flux = np.asarray(d["flux"], np.float64).reshape(-1, O, P)
         err = np.asarray(d["err"], np.float64).reshape(-1, O, P)
         mask = np.asarray(d.get("mask", np.ones(flux.shape, bool)), bool).reshape(-1, O, P)
-        ok = (mask & np.isfinite(flux) & np.isfinite(err) & (err > 0)
-              & (flux >= fc.saturation_mask_threshold))
+        ok = mask & np.isfinite(flux) & np.isfinite(err) & (err > 0)
         ratio = np.where(ok, np.where(ok, flux, 0.0) / np.where(ok, err, 1.0), 0.0)
         valid.append(ok.any(axis=0))
         snr2.append((ratio ** 2).sum(axis=0))
@@ -238,34 +244,34 @@ def mask_order_overlaps(datasets: Union[dict, Sequence[dict]],
         ends = [(e.max() if last else e.min()) for e in ends if e.size]
         return (max(ends) if last else min(ends)) if ends else None
 
-    def select(o, *, upto=None, beyond=None):
-        """Per night, the unmasked pixels of order ``o`` with ln λ ≤ ``upto`` (or ≥ ``beyond``)."""
-        return [valid[i][o] & ~cut[i][o]
-                & ((lnw[i][o] <= upto) if upto is not None else (lnw[i][o] >= beyond))
+    def span(o, *, upto=None, beyond=None):
+        """Per night, the pixels of order ``o`` with ln λ ≤ ``upto`` (or ≥ ``beyond``)."""
+        return [(lnw[i][o] <= upto) if upto is not None else (lnw[i][o] >= beyond)
                 for i in range(len(nights))]
 
     def weight(o, sel):
-        return sum(float(snr2[i][o][s].sum()) for i, s in enumerate(sel))
+        return sum(float(snr2[i][o][s & ~cut[i][o]].sum()) for i, s in enumerate(sel))
 
     def drop(o, sel):
-        """Mask the selected pixels; ``(pixels per exposure, share of the S/N²)``."""
+        """Mask the selected pixels; ``(pixels with data per exposure, share of the S/N²)``."""
+        n = max(int((s & valid[i][o] & ~cut[i][o]).sum()) for i, s in enumerate(sel))
+        share = weight(o, sel) / total
         for i, s in enumerate(sel):
             cut[i][o] |= s
-        return max(int(s.sum()) for s in sel), weight(o, sel) / total
+        return n, share
 
     order = np.argsort(np.min([w.min(axis=1) for w in lnw], axis=0))
     n_pairs = 0
     for a, b in zip(order[:-1], order[1:]):
         if min(w[b].min() for w in lnw) - max(w[a].max() for w in lnw) >= close:
             continue                       # far enough apart for their own nodes
-        n_pairs += 1
         hi, lo = edge(a, last=True), edge(b, last=False)
         if hi is None or lo is None:
             continue
         notes = []
         if hi >= lo:                       # 1. the overlap goes from the dimmer order
             head = f"Orders {a}/{b} overlap by {kms(hi - lo):.0f} km/s"
-            sel_a, sel_b = select(a, beyond=lo), select(b, upto=hi)
+            sel_a, sel_b = span(a, beyond=lo), span(b, upto=hi)
             dim, sel = (b, sel_b) if weight(b, sel_b) <= weight(a, sel_a) else (a, sel_a)
             n, share = drop(dim, sel)
             notes.append(f"masked order {dim} there ({n} px, {100 * share:.2f}% of the S/N²)")
@@ -277,20 +283,25 @@ def mask_order_overlaps(datasets: Union[dict, Sequence[dict]],
             continue
         short = need - (lo - hi)
         if short > 0:                      # 2. widen the gap on the side with less S/N
-            sel_a, sel_b = select(a, beyond=hi - short), select(b, upto=lo + short)
+            sel_a, sel_b = span(a, beyond=hi - short), span(b, upto=lo + short)
             o, sel, end = (a, sel_a, "last") if weight(a, sel_a) <= weight(b, sel_b) else (
                 b, sel_b, "first")
             n, share = drop(o, sel)
             notes.append(f"masked order {o}'s {end} {n} px ({100 * share:.2f}% of the S/N²) "
                          f"to leave the {kms(need):.0f} km/s the template needs")
-        if not notes:
-            notes.append(f"their unmasked pixels already leave the {kms(need):.0f} km/s "
-                         "the template needs")
-        logger.info("%s: %s.", head, "; ".join(notes))
+        if notes:
+            n_pairs += 1
+            logger.info("%s: %s.", head, "; ".join(notes))
+        else:
+            logger.debug("%s: their unmasked pixels already leave the %.0f km/s the "
+                         "template needs.", head, kms(need))
 
-    lost = sum(float(snr2[i][c].sum()) for i, c in enumerate(cut))
-    logger.info("Masked %d pixels per exposure at %d order boundaries (%.1f%% of the S/N²).",
-                max(int(c.sum()) for c in cut), n_pairs, 100 * lost / total)
+    if n_pairs:
+        lost = sum(float(snr2[i][c].sum()) for i, c in enumerate(cut))
+        n_px = max(int((c & v).sum()) for c, v in zip(cut, valid))
+        logger.info("Masked %d pixels per exposure at %d order boundaries (%.1f%% of the "
+                    "S/N²) to give each order its own template nodes.", n_px, n_pairs,
+                    100 * lost / total)
     out = []
     for d, c in zip(nights, cut):
         mask = np.asarray(d.get("mask", np.ones(np.shape(d["flux"]), bool)), bool)
@@ -305,7 +316,9 @@ def fit_nights(datasets: Sequence[dict], fit_config: FitConfig = FitConfig(), *,
 
     All nights must observe the same star with the same instrument setting. Each
     night keeps its own telluric and instrument parameters; the stellar spectrum
-    is one template, in the star's rest frame, shared by every night.
+    is one template, in the star's rest frame, shared by every night. Orders that
+    overlap in wavelength are first masked apart with :func:`mask_order_overlaps`,
+    and the results carry that mask.
 
     Args:
         datasets: night dicts, as for :func:`~enuma.inference.fit.fit_timeseries`.
@@ -324,7 +337,7 @@ def fit_nights(datasets: Sequence[dict], fit_config: FitConfig = FitConfig(), *,
         A :class:`MultiNightResult`. Each entry of ``history`` describes one star
         step: ``round``, ``neg2_lnz`` (−2 ln evidence without the data-only
         constant), ``chi2``, ``penalty``, ``logdet_post``, ``logdet_prior``, the
-        hyperparameters (``sigma``, ``scale``, ``alpha`` and ``ell_kms``, per order),
+        hyperparameters (``sigma``, ``alpha`` and ``ell_kms``, per order),
         the dry-species columns per night (``dry``), and, after the
         telluric step, ``mstep_loss`` (final SVI loss per night).
     """
@@ -336,6 +349,9 @@ def fit_nights(datasets: Sequence[dict], fit_config: FitConfig = FitConfig(), *,
         raise ValueError("Pass one initial fit per night.")
 
     opacities = _shared_opacities(datasets, fc)
+    # Every order gets its own template nodes: overlapping orders are masked apart
+    # first, so that the seed fits see the same pixels.
+    datasets = mask_order_overlaps(datasets, fc, model_wave=opacities[1])
 
     # 0. Seed fits (fixed template) → tellurics and the stellar rest frame.
     if initial is None:
@@ -394,7 +410,7 @@ def fit_nights(datasets: Sequence[dict], fit_config: FitConfig = FitConfig(), *,
     beta_ref, envelope = sg.reference_on_nodes(grid, fc, vsini_kms=vsini0)
     prior = sg.make_prior(grid, beta_ref, envelope)
     hyper = sg.initial_hyper(grid.node_lo.size, fc)
-    beta0 = sg.anchor(prior, hyper)
+    beta0 = prior.beta_ref
 
     history: List[dict] = []
     results: List[Optional[FitResult]] = [None] * len(nights)
@@ -436,16 +452,16 @@ def fit_nights(datasets: Sequence[dict], fit_config: FitConfig = FitConfig(), *,
         history.append(dict(
             round=r, neg2_lnz=float(post.neg2_lnz), chi2=float(post.chi2),
             penalty=float(post.penalty), logdet_post=float(post.logdet_post),
-            logdet_prior=float(post.logdet_prior), sigma=hv["sigma"], scale=hv["scale"],
-            alpha=hv["alpha"], ell_kms=hv["ell_kms"],
+            logdet_prior=float(post.logdet_prior), sigma=hv["sigma"], alpha=hv["alpha"],
+            ell_kms=hv["ell_kms"],
             dry=[{k[len("dry_vmr_"):]: np.asarray(v).ravel().tolist()
                   for k, v in s.items() if k.startswith("dry_vmr_")} for s in sites]))
         logger.info("Star step %d: -2lnZ = %.1f, chi2 = %.1f; median over orders: "
-                    "ell = %.2f km/s, sigma = %.3f, scale = %.2f (normal equations %.0f s, "
+                    "ell = %.2f km/s, sigma = %.3f, alpha = %.2f (normal equations %.0f s, "
                     "evidence and solve %.0f s).", r,
                     history[-1]["neg2_lnz"], history[-1]["chi2"],
                     float(np.median(hv["ell_kms"])), float(np.median(hv["sigma"])),
-                    float(np.median(hv["scale"])), t1 - t0, t2 - t1)
+                    float(np.median(hv["alpha"])), t1 - t0, t2 - t1)
         beta0 = post.mean
         if final:
             break
@@ -483,5 +499,6 @@ def fit_nights(datasets: Sequence[dict], fit_config: FitConfig = FitConfig(), *,
             layout=night.prep.layout,
             param_history=None if last is None else last.param_history,
             stellar=template, stellar_history=history))
+        _log_fit_quality(out[-1])
     return MultiNightResult(nights=tuple(out), stellar=template, history=history,
                             initial=initial)

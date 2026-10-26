@@ -70,6 +70,18 @@ _RESOLUTION = Param(
         list(L.lead("resolution_coeffs") + (c.obs_wave.shape[0], cfg.n_resolution_coeffs))),
     is_free=lambda f: f.fit_resolution,
 )
+# Lorentzian HWHM of the Voigt LSF over its Gaussian sigma: one instrument-wide
+# value, fitted with the resolution. The site is unconstrained and the model uses
+# its absolute value (``forward.lsf_gamma_ratio``): a positive-support prior would
+# make AutoDelta optimise its log, and Adam would need ~1000 steps to climb from
+# the small seed to the 0.1-0.5 the CRIRES+ data prefer.
+_LSF_GAMMA_PRIOR_SIGMA = 0.5
+_LSF_GAMMA = Param(
+    "lsf_gamma_ratio",
+    init=lambda c, cfg, L: jnp.asarray(cfg.lsf_voigt_gamma_ratio),
+    prior=lambda c, cfg, L: dist.Normal(cfg.lsf_voigt_gamma_ratio, _LSF_GAMMA_PRIOR_SIGMA),
+    is_free=lambda f: f.lsf_profile == "voigt" and f.fit_resolution,
+)
 _WAVE = Param(
     "wave_coeffs",
     init=lambda c, cfg, L: jnp.zeros(L.lead("wave_coeffs") + (c.obs_wave.shape[0], cfg.n_wave_coeffs)),
@@ -117,7 +129,7 @@ def _dry_site(species: str) -> Param:
     return Param(
         name,
         init=lambda c, cfg, L: jnp.zeros(L.lead(name) + (1,)),
-        prior=lambda c, cfg, L: dist.Normal(0.0, 0.3).expand(list(L.lead(name) + (1,))),
+        prior=lambda c, cfg, L: dist.Normal(0.0, 0.05).expand(list(L.lead(name) + (1,))),
         is_free=lambda f, s=species: s in resolve_fit_species(f),
     )
 
@@ -132,7 +144,7 @@ def dry_species_of(context: ModelContext,
 def iter_sites(dry_species: Tuple[str, ...]) -> Tuple[Param, ...]:
     """The full ordered site spec, with the dry-column family spliced in."""
     return (_T_LATENT, _H2O_LATENT, *(_dry_site(s) for s in dry_species),
-            _RESOLUTION, _WAVE, _CONTINUUM, _RV_SYSTEMIC, _VSINI)
+            _RESOLUTION, _LSF_GAMMA, _WAVE, _CONTINUUM, _RV_SYSTEMIC, _VSINI)
 
 
 def per_exposure_sites(fit_config: FitConfig, dry_species: Tuple[str, ...]) -> frozenset:

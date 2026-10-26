@@ -32,7 +32,7 @@ def main():
         stellar_logg = 5.0,
         rv_kms = 20.91,
         # stellar_model="gp",             # ... then the stellar spectrum is learned
-        # stellar_reference="newera",     # prior anchor; the evidence sets its weight per order
+        # stellar_reference="newera",     # prior mean of the learned template
         # stellar_em_iterations=5,
         # stellar_mstep_steps=300,
     )
